@@ -1,0 +1,59 @@
+<!--index.wxml-->
+<view class="container">
+  <view class="map-container">
+    <canvas class="map-canvas" type="2d" id="mapCanvas"></canvas>
+
+    <!-- 当未配置地图和Beacon时显示提示 -->
+    <view class="placeholder" wx:if="{{!hasMap}}">
+      <view class="placeholder-text">未加载地图</view>
+      <button class="btn" bindtap="goToConfig">前往配置</button>
+    </view>
+    <view class="placeholder" wx:elif="{{!hasBeacons}}">
+      <view class="placeholder-text">未配置Beacon</view>
+      <button class="btn" bindtap="goToConfig">前往配置</button>
+    </view>
+  </view>
+  
+  <view class="control-panel">
+    <view class="status-info">
+      <view class="status-item">
+        <text class="label">当前位置:</text>
+        <text class="value">{{currentPosition ? currentPosition.x.toFixed(2) + ', ' + currentPosition.y.toFixed(2) + ' 米' : '未定位'}}</text>
+      </view>
+      <view class="status-item">
+        <text class="label">检测到Beacon:</text>
+        <text class="value">{{detectedBeaconCount}}</text>
+      </view>
+      <view class="status-item">
+        <text class="label">定位状态:</text>
+        <text class="value {{isLocating ? 'active' : ''}}">{{isLocating ? '活跃' : '未启动'}}</text>
+      </view>
+    </view>
+    
+    <view class="btn-group">
+      <button class="btn {{isLocating ? 'btn-stop' : 'btn-start'}}" bindtap="toggleLocating">
+        {{isLocating ? '停止定位' : '开始定位'}}
+      </button>
+    </view>
+  </view>
+  
+  <!-- 调试面板，显示检测到的beacon详情 -->
+  <view class="debug-panel" wx:if="{{showDebugInfo}}">
+    <view class="panel-header" bindtap="toggleDebugPanel">
+      <text>调试信息</text>
+      <text class="toggle-icon">{{debugPanelExpanded ? '▼' : '▲'}}</text>
+    </view>
+    <view class="panel-content" wx:if="{{debugPanelExpanded}}">
+      <view class="detected-beacons">
+        <view class="beacon-item" wx:for="{{beaconsWithDistance}}" wx:key="id">
+          <view class="beacon-info">
+            <text class="beacon-id">{{item.id}}</text>
+            <text class="beacon-data">位置: ({{item.x.toFixed(2)}}, {{item.y.toFixed(2)}})</text>
+            <text class="beacon-data">RSSI: {{item.rssi.toFixed(1)}} dBm</text>
+            <text class="beacon-data">距离: {{item.distance.toFixed(2)}} 米</text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </view>
+</view> 

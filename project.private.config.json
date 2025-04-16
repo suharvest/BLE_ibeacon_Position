@@ -1,0 +1,6 @@
+{
+  "projectname": "ble_test",
+  "setting": {
+    "compileHotReLoad": true
+  }
+}

@@ -1,0 +1,235 @@
+<!--config.wxml-->
+<view class="container">
+  <!-- 顶部标签页 -->
+  <view class="tab-header">
+    <view class="tab-item {{activeTab === 'beacon' ? 'active' : ''}}" bindtap="switchTab" data-tab="beacon">
+      Beacon配置
+    </view>
+    <view class="tab-item {{activeTab === 'map' ? 'active' : ''}}" bindtap="switchTab" data-tab="map">
+      地图配置
+    </view>
+    <view class="tab-item {{activeTab === 'settings' ? 'active' : ''}}" bindtap="switchTab" data-tab="settings">
+      通用设置
+    </view>
+  </view>
+  
+  <!-- Beacon配置面板 -->
+  <view class="tab-content" wx:if="{{activeTab === 'beacon'}}">
+    <view class="beacon-list">
+      <!-- Beacon列表 -->
+      <view class="list-header">
+        <text>已配置的Beacon</text>
+        <text class="beacon-count">{{beacons.length}}个</text>
+      </view>
+      
+      <view class="empty-list" wx:if="{{beacons.length === 0}}">
+        <text>暂无配置的iBeacon</text>
+        <text class="empty-tip">点击下方的"添加Beacon"按钮添加</text>
+      </view>
+      
+      <view class="beacon-item" wx:for="{{beacons}}" wx:key="id" bindtap="editBeacon" data-index="{{index}}">
+        <view class="beacon-info">
+          <view class="beacon-name">
+            <text class="beacon-index">{{index + 1}}.</text>
+            <text>{{item.uuid}}</text>
+          </view>
+          <view class="beacon-details">
+            <text>Major: {{item.major}}, Minor: {{item.minor}}</text>
+          </view>
+          <view class="beacon-location">
+            <text>位置: ({{item.x}}米, {{item.y}}米), 功率: {{item.txPower}}dBm</text>
+          </view>
+        </view>
+        <view class="beacon-actions">
+          <view class="delete-btn" catchtap="showDeleteConfirm" data-index="{{index}}">删除</view>
+        </view>
+      </view>
+    </view>
+    
+    <view class="btn-container">
+      <button class="add-btn" bindtap="showBeaconModal" data-mode="add">添加Beacon</button>
+      <button class="scan-btn" bindtap="startScanBeacons">扫描Beacon</button>
+    </view>
+  </view>
+  
+  <!-- 地图配置面板 -->
+  <view class="tab-content" wx:if="{{activeTab === 'map'}}">
+    <view class="map-section">
+      <view class="section-header">
+        <text>地图配置</text>
+      </view>
+      
+      <view class="map-preview">
+        <view class="map-placeholder" wx:if="{{!mapInfo.svgContent}}">
+          <text>未上传地图</text>
+        </view>
+        <canvas wx:else class="map-canvas" type="2d" id="mapPreviewCanvas"></canvas>
+      </view>
+      
+      <view class="config-form">
+        <view class="form-group" wx:if="{{mapInfo.svgContent}}">
+          <view class="form-label">比例尺设置 (像素/米)</view>
+          <view class="form-row">
+            <input class="form-input" type="digit" value="{{mapInfo.pixelsPerMeter}}" bindinput="updatePixelsPerMeter" placeholder="每米对应的像素数量"/>
+          </view>
+        </view>
+        
+        <view class="form-group" wx:if="{{mapInfo.svgContent}}">
+          <view class="form-label">原点坐标 (像素)</view>
+          <view class="form-row">
+            <input class="form-input half" type="digit" value="{{mapInfo.originX}}" bindinput="updateOriginX" placeholder="X"/>
+            <input class="form-input half" type="digit" value="{{mapInfo.originY}}" bindinput="updateOriginY" placeholder="Y"/>
+          </view>
+          <view class="form-tip">原点为米制坐标系(0,0)点在SVG中的像素位置</view>
+        </view>
+      </view>
+      
+      <view class="map-buttons">
+        <button class="btn" bindtap="uploadMap">{{mapInfo.svgContent ? '更换地图' : '上传地图'}}</button>
+        <button class="btn btn-save" bindtap="saveMapConfig" wx:if="{{mapInfo.svgContent}}">保存配置</button>
+      </view>
+    </view>
+  </view>
+  
+  <!-- 通用设置面板 -->
+  <view class="tab-content" wx:if="{{activeTab === 'settings'}}">
+    <view class="settings-section">
+      <view class="section-header">
+        <text>信号参数配置</text>
+      </view>
+      
+      <view class="setting-item">
+        <view class="setting-label">信号传播因子 (n)</view>
+        <view class="setting-value">
+          <slider min="2" max="4" step="0.1" value="{{signalPathLossExponent}}" show-value bindchange="updateSignalFactor"/>
+        </view>
+        <view class="setting-desc">影响距离计算的环境因子，开阔环境约为2，复杂室内环境约为4</view>
+      </view>
+      
+      <view class="settings-buttons">
+        <button class="btn btn-save" bindtap="saveSettings">保存设置</button>
+      </view>
+    </view>
+  </view>
+</view>
+
+<!-- Beacon编辑/添加弹窗 -->
+<view class="modal" wx:if="{{showBeaconModal}}">
+  <view class="modal-mask" bindtap="hideBeaconModal"></view>
+  <view class="modal-content">
+    <view class="modal-header">
+      <text>{{beaconModalMode === 'add' ? '添加Beacon' : '编辑Beacon'}}</text>
+    </view>
+    <view class="modal-body">
+      <view class="form-group">
+        <view class="form-label">UUID</view>
+        <input class="form-input" value="{{editingBeacon.uuid}}" bindinput="updateBeaconField" data-field="uuid" placeholder="Beacon UUID"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">Major</view>
+        <input class="form-input" type="number" value="{{editingBeacon.major}}" bindinput="updateBeaconField" data-field="major" placeholder="Beacon Major"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">Minor</view>
+        <input class="form-input" type="number" value="{{editingBeacon.minor}}" bindinput="updateBeaconField" data-field="minor" placeholder="Beacon Minor"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">位置 X (米)</view>
+        <input class="form-input" type="digit" value="{{editingBeacon.x}}" bindinput="updateBeaconField" data-field="x" placeholder="X坐标 (米)"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">位置 Y (米)</view>
+        <input class="form-input" type="digit" value="{{editingBeacon.y}}" bindinput="updateBeaconField" data-field="y" placeholder="Y坐标 (米)"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">信号功率 (dBm)</view>
+        <input class="form-input" type="digit" value="{{editingBeacon.txPower}}" bindinput="updateBeaconField" data-field="txPower" placeholder="1米处的信号强度"/>
+      </view>
+    </view>
+    <view class="modal-footer">
+      <button class="btn btn-cancel" bindtap="hideBeaconModal">取消</button>
+      <button class="btn btn-confirm" bindtap="confirmBeaconEdit">确认</button>
+    </view>
+  </view>
+</view>
+
+<!-- 删除确认弹窗 -->
+<view class="modal" wx:if="{{showDeleteConfirmModal}}">
+  <view class="modal-mask"></view>
+  <view class="modal-content modal-confirm">
+    <view class="modal-header">
+      <text>确认删除</text>
+    </view>
+    <view class="modal-body">
+      <text>确定要删除该Beacon配置吗？</text>
+    </view>
+    <view class="modal-footer">
+      <button class="btn btn-cancel" bindtap="cancelDelete">取消</button>
+      <button class="btn btn-danger" bindtap="confirmDelete">删除</button>
+    </view>
+  </view>
+</view>
+
+<!-- Beacon扫描结果弹窗 -->
+<view class="modal" wx:if="{{showScanResultModal}}">
+  <view class="modal-mask" bindtap="hideScanResultModal"></view>
+  <view class="modal-content">
+    <view class="modal-header">
+      <text>扫描到的Beacon</text>
+    </view>
+    <view class="modal-body">
+      <view class="scanning-status" wx:if="{{isScanning}}">
+        <view class="loading-indicator"></view>
+        <text>正在扫描...</text>
+      </view>
+      
+      <view class="empty-scan-result" wx:if="{{!isScanning && scanResults.length === 0}}">
+        <text>未扫描到Beacon设备</text>
+        <text class="empty-tip">请确保beacon已开启并在附近</text>
+      </view>
+      
+      <view class="scan-results-list" wx:if="{{scanResults.length > 0}}">
+        <view class="scan-result-item" wx:for="{{scanResults}}" wx:key="id" bindtap="selectBeaconFromScan" data-index="{{index}}">
+          <view class="beacon-info">
+            <view class="beacon-name">
+              <text>{{item.name ? item.name : item.uuid}}</text>
+            </view>
+            <view class="beacon-details">
+              <text>{{item.major !== undefined ? 'Major: ' + item.major + ', Minor: ' + item.minor : '非标准iBeacon'}}</text>
+            </view>
+            <view class="beacon-signal">
+              <text>RSSI: {{item.rssi}}dBm</text>
+            </view>
+          </view>
+        </view>
+      </view>
+      
+      <!-- 调试信息区域 -->
+      <view class="debug-section">
+        <view class="debug-toggle" bindtap="toggleDebugInfo">
+          <text>{{showDebugInfo ? '隐藏' : '显示'}}调试信息</text>
+        </view>
+        <view class="debug-info" wx:if="{{showDebugInfo}}">
+          <view class="debug-item">
+            <text class="debug-label">蓝牙状态:</text>
+            <text class="debug-value">{{bluetoothStatus}}</text>
+          </view>
+          <view class="debug-item">
+            <text class="debug-label">已扫描设备数:</text>
+            <text class="debug-value">{{scannedDevicesCount || 0}}</text>
+          </view>
+          <view class="debug-item">
+            <text class="debug-label">最近广播数据:</text>
+            <text class="debug-value">{{lastAdvertData || '无'}}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+    <view class="modal-footer">
+      <button class="btn btn-cancel" bindtap="hideScanResultModal">取消</button>
+      <button class="btn {{isScanning ? 'btn-stop' : 'btn-scan'}}" bindtap="{{isScanning ? 'stopScanBeacons' : 'startScanBeacons'}}">
+        {{isScanning ? '停止扫描' : '重新扫描'}}
+      </button>
+    </view>
+  </view>
+</view> 

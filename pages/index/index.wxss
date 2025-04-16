@@ -1,0 +1,152 @@
+/* index.wxss */
+.container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.map-container {
+  flex: 1;
+  width: 100%;
+  position: relative;
+  background-color: #f5f5f5;
+  overflow: hidden;
+}
+
+.map-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.placeholder {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(245, 245, 245, 0.9);
+}
+
+.placeholder-text {
+  font-size: 18px;
+  color: #666;
+  margin-bottom: 20px;
+}
+
+.control-panel {
+  background-color: #fff;
+  padding: 12px 16px;
+  border-top: 1px solid #eee;
+}
+
+.status-info {
+  display: flex;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.status-item {
+  flex: 1;
+  min-width: 30%;
+  margin-bottom: 8px;
+}
+
+.label {
+  font-size: 14px;
+  color: #666;
+  margin-right: 5px;
+}
+
+.value {
+  font-size: 14px;
+  color: #333;
+  font-weight: 500;
+}
+
+.value.active {
+  color: #3366cc;
+}
+
+.btn-group {
+  display: flex;
+  justify-content: center;
+  margin-top: 5px;
+}
+
+.btn {
+  padding: 8px 24px;
+  font-size: 14px;
+  border-radius: 20px;
+  background-color: #3366cc;
+  color: white;
+  border: none;
+  margin: 0 5px;
+}
+
+.btn-start {
+  background-color: #3366cc;
+}
+
+.btn-stop {
+  background-color: #e74c3c;
+}
+
+.debug-panel {
+  background-color: #f9f9f9;
+  border-top: 1px solid #eee;
+}
+
+.panel-header {
+  padding: 10px 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background-color: #eee;
+}
+
+.toggle-icon {
+  font-size: 12px;
+  color: #666;
+}
+
+.panel-content {
+  padding: 10px 16px;
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.detected-beacons {
+  display: flex;
+  flex-direction: column;
+}
+
+.beacon-item {
+  display: flex;
+  padding: 8px 0;
+  border-bottom: 1px solid #eee;
+}
+
+.beacon-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.beacon-id {
+  font-size: 12px;
+  color: #3366cc;
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.beacon-data {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 2px;
+} 
