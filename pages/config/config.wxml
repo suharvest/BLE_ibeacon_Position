@@ -60,33 +60,33 @@
       </view>
       
       <view class="map-preview">
-        <view class="map-placeholder" wx:if="{{!mapInfo.svgContent}}">
-          <text>未上传地图</text>
+        <!-- 使用canvas - 固定高度，添加触摸事件处理 -->
+        <canvas type="2d" id="mapCanvas" class="map-canvas" bindtouchstart="onMapCanvasTouchStart"></canvas>
+        
+        <!-- 改为非模态提示，显示在地图顶部 -->
+        <view class="coord-select-header" wx:if="{{coordSelectMode}}">
+          <view class="coord-select-title">请点击地图选择位置</view>
+          <view class="coord-btn-group">
+            <button class="coord-cancel-btn" bindtap="cancelCoordinateSelection">取消</button>
+            <button class="coord-confirm-btn" bindtap="confirmCoordinateSelection" wx:if="{{tempSelectedCoords}}">确认</button>
+          </view>
         </view>
-        <canvas wx:else class="map-canvas" type="2d" id="mapPreviewCanvas"></canvas>
       </view>
       
-      <view class="config-form">
-        <view class="form-group" wx:if="{{mapInfo.svgContent}}">
-          <view class="form-label">比例尺设置 (像素/米)</view>
-          <view class="form-row">
-            <input class="form-input" type="digit" value="{{mapInfo.pixelsPerMeter}}" bindinput="updatePixelsPerMeter" placeholder="每米对应的像素数量"/>
-          </view>
+      <view class="map-instructions">
+        <view class="instruction-item">
+          <icon type="info" size="16" color="#3884ff"/>
+          <text>点击地图可选择坐标位置</text>
         </view>
-        
-        <view class="form-group" wx:if="{{mapInfo.svgContent}}">
-          <view class="form-label">原点坐标 (像素)</view>
-          <view class="form-row">
-            <input class="form-input half" type="digit" value="{{mapInfo.originX}}" bindinput="updateOriginX" placeholder="X"/>
-            <input class="form-input half" type="digit" value="{{mapInfo.originY}}" bindinput="updateOriginY" placeholder="Y"/>
-          </view>
-          <view class="form-tip">原点为米制坐标系(0,0)点在SVG中的像素位置</view>
+        <view class="instruction-item">
+          <icon type="info" size="16" color="#3884ff"/>
+          <text>JSON地图使用真实米坐标，无需额外配置</text>
         </view>
       </view>
       
       <view class="map-buttons">
-        <button class="btn" bindtap="uploadMap">{{mapInfo.svgContent ? '更换地图' : '上传地图'}}</button>
-        <button class="btn btn-save" bindtap="saveMapConfig" wx:if="{{mapInfo.svgContent}}">保存配置</button>
+        <button class="btn {{coordSelectMode ? 'btn-disabled' : ''}}" bindtap="{{coordSelectMode ? '' : 'uploadMap'}}">{{mapInfo.jsonContent ? '更换地图' : '上传地图'}}</button>
+        <button class="btn btn-save {{coordSelectMode ? 'btn-disabled' : ''}}" bindtap="{{coordSelectMode ? '' : 'saveMapConfig'}}">保存配置</button>
       </view>
     </view>
   </view>
@@ -108,6 +108,34 @@
       
       <view class="settings-buttons">
         <button class="btn btn-save" bindtap="saveSettings">保存设置</button>
+      </view>
+      
+      <view class="map-info-section">
+        <view class="section-header">
+          <text>地图文件说明</text>
+        </view>
+        
+        <view class="info-content">
+          <view class="info-title">JSON地图格式说明:</view>
+          <view class="info-item">
+            <text class="format-desc">需要使用正确的JSON格式，包含以下必须字段:</text>
+            <view class="code-example">
+              <text>
+{
+  "width": 10,   // 地图宽度（米）
+  "height": 8,   // 地图高度（米）
+  "entities": [  // 地图中的实体列表
+    {
+      "type": "polyline",            // 实体类型
+      "points": [[0,0], [10,0], [10,8], [0,8], [0,0]],  // 坐标点
+      "closed": true                 // 是否闭合
+    }
+  ]
+}
+              </text>
+            </view>
+          </view>
+        </view>
       </view>
     </view>
   </view>
@@ -135,7 +163,10 @@
       </view>
       <view class="form-group">
         <view class="form-label">位置 X (米)</view>
-        <input class="form-input" type="digit" value="{{editingBeacon.x}}" bindinput="updateBeaconField" data-field="x" placeholder="X坐标 (米)"/>
+        <view class="form-row">
+          <input class="form-input with-button" type="digit" value="{{editingBeacon.x}}" bindinput="updateBeaconField" data-field="x" placeholder="X坐标 (米)"/>
+          <button class="map-select-btn" bindtap="selectCoordinateFromMap">从地图选择</button>
+        </view>
       </view>
       <view class="form-group">
         <view class="form-label">位置 Y (米)</view>
@@ -200,6 +231,9 @@
             <view class="beacon-signal">
               <text>RSSI: {{item.rssi}}dBm</text>
             </view>
+          </view>
+          <view class="beacon-add-icon">
+            <text>添加</text>
           </view>
         </view>
       </view>
