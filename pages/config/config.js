@@ -1,5 +1,6 @@
 // config.js
 const app = getApp();
+const appManager = require('../../utils/appManager');
 // 只保留JSON地图格式处理
 const dxfParser = require('../../utils/dxfParser');
 
@@ -62,34 +63,133 @@ Page({
   
   // 加载数据
   loadData() {
-    try {
-      // 从本地存储加载beacon列表
-      const beacons = wx.getStorageSync('beacons');
-      if (beacons) {
-        this.setData({ beacons });
-        app.globalData.beacons = beacons;
+    // 1. 从appManager获取状态
+    if (appManager && appManager.getState) {
+      const state = appManager.getState();
+      console.log('从appManager获取应用状态:', state);
+      
+      // 加载信标配置
+      if (state.configuredBeaconCount > 0) {
+        // 从beaconManager获取配置的信标
+        const configuredBeacons = appManager.getState().configuredBeacons || [];
+        if (Array.isArray(configuredBeacons) && configuredBeacons.length > 0) {
+          console.log('从appManager加载到信标配置数据:', configuredBeacons.length, '个');
+          this.setData({
+            beacons: configuredBeacons
+          });
+        }
+      } else {
+        console.log('appManager中没有配置的信标');
       }
       
-      // 加载地图信息
-      const mapInfo = wx.getStorageSync('mapInfo');
-      if (mapInfo) {
-        this.setData({ mapInfo });
-        app.globalData.mapInfo = mapInfo;
-        
-        // 如果有地图内容，初始化预览
-        if (mapInfo.jsonContent) {
-          this.initMapPreview();
+      // 2. 如果appManager中没有信标数据，尝试从本地存储获取
+      if (!this.data.beacons || this.data.beacons.length === 0) {
+        try {
+          const beacons = wx.getStorageSync('beacons') || [];
+          if (Array.isArray(beacons) && beacons.length > 0) {
+            console.log('从本地存储加载到信标配置:', beacons.length, '个');
+            this.setData({
+              beacons: beacons
+            });
+            
+            // 同步到appManager
+            appManager.saveBeaconsToStorage(beacons)
+              .then(() => console.log('将本地存储的信标同步到appManager成功'))
+              .catch(err => console.error('同步信标到appManager失败:', err));
+          }
+        } catch (e) {
+          console.error('加载信标配置失败:', e);
         }
       }
       
-      // 加载信号传播因子
-      const n = wx.getStorageSync('signalPathLossExponent');
-      if (n) {
-        this.setData({ signalPathLossExponent: n });
-        app.globalData.signalPathLossExponent = n;
+      // 加载地图信息
+      try {
+        // 从本地存储获取
+        const mapInfo = wx.getStorageSync('mapInfo');
+        if (mapInfo) {
+          this.setData({
+            mapInfo: mapInfo
+          });
+        }
+        
+        // 从appManager检查地图状态
+        if (state.hasMap) {
+          console.log('从appManager检测到地图配置，尝试加载');
+          
+          // 如果本地存储中没有mapInfo，但appManager中有，则初始化地图预览
+          if (!this.data.mapInfo.jsonContent && this.data.activeTab === 'map') {
+            setTimeout(() => {
+              this.initMapPreview();
+            }, 300);
+          }
+        }
+      } catch (e) {
+        console.error('加载地图信息失败:', e);
+      }
+      
+      // 加载信号因子
+      try {
+        // 从beaconManager获取信号因子
+        const factor = appManager.getState().signalFactor;
+        if (factor && !isNaN(parseFloat(factor))) {
+          console.log('从appManager加载信号因子:', factor);
+          this.setData({
+            signalPathLossExponent: parseFloat(factor)
+          });
+        } else {
+          // 尝试从本地存储获取
+          const storedFactor = wx.getStorageSync('signalPathLossExponent');
+          if (storedFactor && !isNaN(parseFloat(storedFactor))) {
+            this.setData({
+              signalPathLossExponent: parseFloat(storedFactor)
+            });
+          }
+        }
+      } catch (e) {
+        console.error('加载信号因子失败:', e);
+      }
+    } else {
+      console.error('appManager未初始化或不可用，尝试从本地存储加载');
+      this.loadFromLocalStorage();
+    }
+  },
+  
+  // 从本地存储加载数据的备用方法
+  loadFromLocalStorage() {
+    // 加载信标配置
+    try {
+      const beacons = wx.getStorageSync('beacons') || [];
+      if (Array.isArray(beacons)) {
+        this.setData({
+          beacons: beacons
+        });
       }
     } catch (e) {
-      console.error('加载存储数据失败', e);
+      console.error('从本地存储加载信标配置失败:', e);
+    }
+    
+    // 加载地图信息
+    try {
+      const mapInfo = wx.getStorageSync('mapInfo');
+      if (mapInfo) {
+        this.setData({
+          mapInfo: mapInfo
+        });
+      }
+    } catch (e) {
+      console.error('从本地存储加载地图信息失败:', e);
+    }
+    
+    // 加载信号因子
+    try {
+      const factor = wx.getStorageSync('signalPathLossExponent');
+      if (factor && !isNaN(parseFloat(factor))) {
+        this.setData({
+          signalPathLossExponent: parseFloat(factor)
+        });
+      }
+    } catch (e) {
+      console.error('从本地存储加载信号因子失败:', e);
     }
   },
   
@@ -114,6 +214,14 @@ Page({
   initMapPreview() {
     console.log('初始化地图预览');
     
+    // 防止重复初始化
+    if (this.initMapPreviewInProgress) {
+      console.log('地图预览初始化已在进行中，跳过重复调用');
+      return;
+    }
+    
+    this.initMapPreviewInProgress = true;
+    
     // 确保临时选择点被清除
     if (this.data.tempSelectedCoords) {
       console.log('发现临时选择坐标，主动清除');
@@ -124,12 +232,42 @@ Page({
     query.select('#mapCanvas')  // 使用正确的canvas ID
       .fields({ node: true, size: true })
       .exec((res) => {
-        if (!res[0] || !res[0].node) {
-          console.error('获取Canvas节点失败');
+        // 重置状态标志
+        this.initMapPreviewInProgress = false;
+        
+        if (!res || !res[0]) {
+          console.error('获取Canvas节点失败：结果为空');
+          wx.showToast({
+            title: '获取画布节点失败',
+            icon: 'none',
+            duration: 2000
+          });
+          return;
+        }
+        
+        if (!res[0].node) {
+          console.error('获取Canvas节点失败：node属性为空');
+          wx.showToast({
+            title: '画布节点无效',
+            icon: 'none',
+            duration: 2000
+          });
           return;
         }
         
         const canvas = res[0].node;
+        
+        // 检查canvas是否有效
+        if (!canvas || typeof canvas.getContext !== 'function') {
+          console.error('Canvas节点无效：getContext方法不存在');
+          wx.showToast({
+            title: 'Canvas节点无效',
+            icon: 'none',
+            duration: 2000
+          });
+          return;
+        }
+        
         console.log('Canvas尺寸:', res[0].width, 'x', res[0].height);
         
         // 设置Canvas大小，适应不同设备
@@ -138,38 +276,59 @@ Page({
         canvas.width = width;
         canvas.height = height;
         
-        const ctx = canvas.getContext('2d');
+        console.log('Canvas大小已设置为:', canvas.width, 'x', canvas.height);
         
-        // 清空Canvas
-        ctx.clearRect(0, 0, width, height);
-        
-        // 添加边框，便于调试
-        ctx.strokeStyle = '#cccccc';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(0, 0, width, height);
-        
-        // 获取地图数据
-        const mapInfo = this.data.mapInfo;
-        
-        // 绘制JSON
-        if (mapInfo.jsonContent) {
-          console.log('准备绘制JSON地图，实体数量:', mapInfo.jsonContent.entities.length);
-          this.drawJSONMap(ctx, canvas.width, canvas.height);
+        try {
+          const ctx = canvas.getContext('2d');
           
-          // 添加地图点击事件
-          this.setupMapClickEvent(canvas);
+          if (!ctx) {
+            console.error('获取2d上下文失败');
+            wx.showToast({
+              title: '获取Canvas上下文失败',
+              icon: 'none',
+              duration: 2000
+            });
+            return;
+          }
           
-          console.log('地图预览初始化完成');
-        } else {
-          console.error('没有有效的地图内容');
+          // 清空Canvas
+          ctx.clearRect(0, 0, width, height);
           
-          // 显示提示信息
-          ctx.fillStyle = '#666666';
-          ctx.font = '14px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText('请上传JSON格式地图', width/2, height/2 - 10);
-          ctx.fillText('(需包含width, height和entities字段)', width/2, height/2 + 20);
-          return;
+          // 添加边框，便于调试
+          ctx.strokeStyle = '#cccccc';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(0, 0, width, height);
+          
+          // 获取地图数据
+          const mapInfo = this.data.mapInfo;
+          
+          // 绘制JSON
+          if (mapInfo && mapInfo.jsonContent) {
+            console.log('准备绘制JSON地图，实体数量:', mapInfo.jsonContent.entities ? mapInfo.jsonContent.entities.length : 0);
+            this.drawJSONMap(ctx, canvas.width, canvas.height);
+            
+            // 添加地图点击事件
+            this.setupMapClickEvent(canvas);
+            
+            console.log('地图预览初始化完成');
+          } else {
+            console.error('没有有效的地图内容');
+            
+            // 显示提示信息
+            ctx.fillStyle = '#666666';
+            ctx.font = '14px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('请上传JSON格式地图', width/2, height/2 - 10);
+            ctx.fillText('(需包含width, height和entities字段)', width/2, height/2 + 20);
+            return;
+          }
+        } catch (err) {
+          console.error('初始化地图预览出错:', err);
+          wx.showToast({
+            title: '初始化地图预览失败: ' + (err.message || String(err)),
+            icon: 'none',
+            duration: 2000
+          });
         }
       });
   },
@@ -183,11 +342,27 @@ Page({
       extension: ['json'],  // 只支持JSON格式
       success: (res) => {
         console.log('文件选择成功:', res);
+        
+        if (!res.tempFiles || !res.tempFiles.length) {
+          wx.showModal({
+            title: '上传失败',
+            content: '未能获取所选文件',
+            showCancel: false
+          });
+          return;
+        }
+        
         const tempFilePath = res.tempFiles[0].path;
         const fileName = res.tempFiles[0].name || '';
         const fileSize = res.tempFiles[0].size || 0;
         
         console.log(`选择的文件: 名称=${fileName}, 大小=${fileSize}字节, 路径=${tempFilePath}`);
+        
+        // 显示加载提示
+        wx.showLoading({
+          title: '解析地图文件...',
+          mask: true
+        });
         
         // 读取JSON文件
         wx.getFileSystemManager().readFile({
@@ -195,78 +370,256 @@ Page({
           encoding: 'utf8',
           success: (readRes) => {
             try {
+              if (!readRes || !readRes.data) {
+                throw new Error('文件内容为空');
+              }
+              
               console.log('JSON文件读取成功, 内容长度:', readRes.data.length);
               
               // 解析JSON
-              const jsonData = JSON.parse(readRes.data);
-              console.log('JSON解析结果:', jsonData);
-              
-              // 验证JSON格式
-              if (!jsonData.entities || !Array.isArray(jsonData.entities) || !jsonData.width || !jsonData.height) {
-                console.error('JSON格式无效, 缺少必要字段');
+              let jsonData;
+              try {
+                jsonData = JSON.parse(readRes.data);
+                console.log('JSON解析成功:', jsonData);
+              } catch (parseErr) {
+                console.error('JSON解析失败:', parseErr);
+                wx.hideLoading();
                 wx.showModal({
-                  title: '格式错误',
-                  content: 'JSON地图格式无效，需要包含width、height和entities字段',
+                  title: 'JSON解析错误',
+                  content: '文件不是有效的JSON格式: ' + parseErr.message,
                   showCancel: false
                 });
                 return;
               }
               
-              // 更新地图信息
-              const mapInfo = this.data.mapInfo;
-              mapInfo.jsonContent = jsonData;
-              mapInfo.fileType = 'json';
-              this.setData({ 
-                mapInfo,
-                activeTab: 'map'  // 切换到地图标签页
+              // 验证JSON格式
+              if (!this.validateMapJSON(jsonData)) {
+                wx.hideLoading();
+                wx.showModal({
+                  title: '格式错误',
+                  content: '地图文件格式无效，请确保JSON包含width、height和entities字段',
+                  showCancel: false
+                });
+                return;
+              }
+              
+              // 更新地图数据
+              this.setData({
+                'mapInfo.jsonContent': jsonData,
+                'mapInfo.fileType': 'json'
               });
               
-              // 初始化地图预览
-              setTimeout(() => {
-                this.initMapPreview();
-              }, 300);  // 添加延时确保DOM已更新
+              // 保存到本地存储
+              this.saveMapToStorage();
               
+              wx.hideLoading();
               wx.showToast({
-                title: '地图导入成功',
+                title: '地图加载成功',
                 icon: 'success'
               });
-            } catch (error) {
-              console.error('JSON解析失败:', error);
+              
+              // 延迟初始化地图预览，确保Canvas和存储操作完成
+              setTimeout(() => {
+                console.log('延迟初始化地图预览...');
+                this.initMapPreview();
+              }, 500);
+            } catch (e) {
+              wx.hideLoading();
+              console.error('解析JSON文件失败:', e);
               wx.showModal({
-                title: 'JSON解析失败',
-                content: `错误信息: ${error.message || '未知错误'}`,
+                title: '解析错误',
+                content: '无法解析JSON文件: ' + e.message,
                 showCancel: false
               });
             }
           },
           fail: (err) => {
-            console.error('JSON文件读取失败:', err);
-            wx.showToast({
-              title: '地图导入失败',
-              icon: 'none'
+            wx.hideLoading();
+            console.error('读取文件失败:', err);
+            wx.showModal({
+              title: '读取失败',
+              content: '无法读取文件: ' + (err.errMsg || '未知错误'),
+              showCancel: false
             });
           }
         });
       },
       fail: (err) => {
         console.error('选择文件失败:', err);
+        wx.showToast({
+          title: '选择文件失败',
+          icon: 'none'
+        });
       }
     });
+  },
+  
+  // 验证地图JSON
+  validateMapJSON(jsonData) {
+    // 检查必须的字段
+    if (!jsonData) {
+      console.error('JSON数据为空');
+      return false;
+    }
+    
+    if (typeof jsonData.width !== 'number' || jsonData.width <= 0) {
+      console.error('JSON地图缺少有效的width字段');
+      return false;
+    }
+    
+    if (typeof jsonData.height !== 'number' || jsonData.height <= 0) {
+      console.error('JSON地图缺少有效的height字段');
+      return false;
+    }
+    
+    if (!Array.isArray(jsonData.entities)) {
+      console.error('JSON地图缺少entities数组');
+      return false;
+    }
+    
+    // 检查实体是否有效
+    if (jsonData.entities.length === 0) {
+      console.warn('警告: 地图JSON不包含任何实体');
+      // 仍然允许空地图，但提出警告
+    } else {
+      // 验证至少有一个有效的实体
+      let hasValidEntity = false;
+      for (const entity of jsonData.entities) {
+        if (entity && entity.type) {
+          hasValidEntity = true;
+          break;
+        }
+      }
+      
+      if (!hasValidEntity) {
+        console.error('JSON地图不包含任何有效实体');
+        return false;
+      }
+    }
+    
+    console.log('JSON地图验证通过');
+    return true;
+  },
+  
+  // 保存地图到本地存储
+  saveMapToStorage() {
+    try {
+      // 获取地图数据
+      const mapData = this.data.mapInfo.jsonContent;
+      if (!mapData) {
+        console.error('无法保存地图：地图数据为空');
+        return;
+      }
+      
+      // 使用appManager保存地图数据
+      appManager.loadMapData(mapData)
+        .then(() => {
+          console.log('地图信息已通过appManager保存');
+        })
+        .catch(err => {
+          console.error('通过appManager保存地图失败:', err);
+          // 作为备份，同时保存到原来的存储位置
+          wx.setStorageSync('mapInfo', this.data.mapInfo);
+          app.globalData.mapInfo = this.data.mapInfo;
+        });
+    } catch (e) {
+      console.error('保存地图信息失败:', e);
+      // 备份保存方式
+      wx.setStorageSync('mapInfo', this.data.mapInfo);
+      app.globalData.mapInfo = this.data.mapInfo;
+    }
   },
   
   // 保存地图配置
   saveMapConfig() {
     // 保存到全局数据和本地存储
     app.globalData.mapInfo = this.data.mapInfo;
-    wx.setStorageSync('mapInfo', this.data.mapInfo);
     
-    // 重新绘制预览
-    this.initMapPreview();
+    // 使用appManager保存地图数据
+    const mapData = this.data.mapInfo.jsonContent;
     
-    wx.showToast({
-      title: '配置已保存',
-      icon: 'success'
-    });
+    console.log('===== 开始保存地图配置 =====');
+    if (mapData) {
+      console.log('地图尺寸:', mapData.width, 'x', mapData.height);
+      console.log('实体数量:', mapData.entities ? mapData.entities.length : 0);
+      
+      if (mapData.entities && mapData.entities.length > 0) {
+        let polylineCount = 0, circleCount = 0, textCount = 0, otherCount = 0;
+        let closedCount = 0, filledCount = 0;
+        
+        mapData.entities.forEach(entity => {
+          if (!entity || !entity.type) return;
+          
+          switch(entity.type.toLowerCase()) {
+            case 'polyline': 
+              polylineCount++; 
+              if (entity.closed) closedCount++;
+              if (entity.fill || entity.fillColor) filledCount++;
+              break;
+            case 'circle': circleCount++; break;
+            case 'text': textCount++; break;
+            default: otherCount++;
+          }
+        });
+        
+        console.log('实体统计: 折线=' + polylineCount + 
+                   ', 圆形=' + circleCount + 
+                   ', 文本=' + textCount + 
+                   ', 其他=' + otherCount);
+        console.log('折线属性: 闭合=' + closedCount + 
+                   ', 填充=' + filledCount);
+        
+        // 输出第一个实体的详细信息
+        console.log('第一个实体示例:', JSON.stringify(mapData.entities[0]).substring(0, 200));
+        
+        // 如果是折线，输出点的数量
+        if (mapData.entities[0].type.toLowerCase() === 'polyline' && Array.isArray(mapData.entities[0].points)) {
+          console.log('第一个折线点数:', mapData.entities[0].points.length);
+        }
+      }
+      
+      wx.showLoading({
+        title: '保存中...',
+        mask: true
+      });
+      
+      appManager.loadMapData(mapData)
+        .then(() => {
+          console.log('地图配置保存成功');
+          wx.hideLoading();
+          wx.showToast({
+            title: '配置已保存',
+            icon: 'success'
+          });
+          
+          // 输出渲染器状态
+          const rendererState = appManager.getRendererState ? appManager.getRendererState() : null;
+          if (rendererState && rendererState.mapInfo) {
+            console.log('保存后渲染器状态:');
+            console.log('- 地图尺寸:', rendererState.mapInfo.width, 'x', rendererState.mapInfo.height);
+            console.log('- 实体数量:', rendererState.mapInfo.entities ? rendererState.mapInfo.entities.length : 0);
+          }
+          
+          // 重新绘制预览
+          this.initMapPreview();
+        })
+        .catch(err => {
+          console.error('保存地图配置失败:', err);
+          wx.hideLoading();
+          wx.showModal({
+            title: '保存失败',
+            content: '保存地图配置失败: ' + (err.message || String(err)),
+            showCancel: false
+          });
+        });
+    } else {
+      console.log('没有地图数据可保存');
+      wx.showToast({
+        title: '没有地图数据可保存',
+        icon: 'none'
+      });
+    }
+    console.log('===== 保存地图配置结束 =====');
   },
   
   // 更新信号传播因子
@@ -279,14 +632,41 @@ Page({
   
   // 保存通用设置
   saveSettings() {
-    // 保存到全局数据和本地存储
-    app.globalData.signalPathLossExponent = this.data.signalPathLossExponent;
-    wx.setStorageSync('signalPathLossExponent', this.data.signalPathLossExponent);
+    // 获取信号因子
+    const factor = parseFloat(this.data.signalPathLossExponent);
     
-    wx.showToast({
-      title: '设置已保存',
-      icon: 'success'
-    });
+    // 使用appManager保存信号因子
+    try {
+      appManager.saveSignalFactorToStorage(factor)
+        .then(() => {
+          console.log('信号因子通过appManager保存成功');
+          wx.showToast({
+            title: '设置已保存',
+            icon: 'success'
+          });
+        })
+        .catch(err => {
+          console.error('通过appManager保存信号因子失败:', err);
+          // 备份保存方式
+          app.globalData.signalPathLossExponent = factor;
+          wx.setStorageSync('signalPathLossExponent', factor);
+          
+          wx.showToast({
+            title: '设置已保存',
+            icon: 'success'
+          });
+        });
+    } catch (e) {
+      console.error('保存信号因子失败:', e);
+      // 备份保存方式
+      app.globalData.signalPathLossExponent = factor;
+      wx.setStorageSync('signalPathLossExponent', factor);
+      
+      wx.showToast({
+        title: '设置已保存',
+        icon: 'success'
+      });
+    }
   },
   
   // 显示添加/编辑Beacon弹窗
@@ -350,117 +730,193 @@ Page({
   
   // 确认编辑/添加beacon
   confirmBeaconEdit() {
-    // 验证输入
-    const { uuid, major, minor, x, y, txPower } = this.data.editingBeacon;
+    // 验证数据
+    const beacon = this.data.editingBeacon;
     
-    if (!uuid) {
-      wx.showModal({
-        title: '输入错误',
-        content: '请输入UUID',
-        showCancel: false
+    // UUID必填验证
+    if (!beacon.uuid || beacon.uuid.trim() === '') {
+      wx.showToast({
+        title: 'UUID不能为空',
+        icon: 'none'
       });
       return;
     }
     
-    if (!major) {
-      wx.showModal({
-        title: '输入错误',
-        content: '请输入Major值',
-        showCancel: false
+    // 坐标必需是数字
+    if (!beacon.x || beacon.x.toString().trim() === '') {
+      wx.showToast({
+        title: 'X坐标不能为空',
+        icon: 'none'
       });
       return;
     }
     
-    if (!minor) {
-      wx.showModal({
-        title: '输入错误',
-        content: '请输入Minor值',
-        showCancel: false
+    if (!beacon.y || beacon.y.toString().trim() === '') {
+      wx.showToast({
+        title: 'Y坐标不能为空',
+        icon: 'none'
       });
       return;
     }
     
-    if (!x || !y) {
-      wx.showModal({
-        title: '输入错误',
-        content: '请输入位置坐标',
-        showCancel: false
+    if (!beacon.txPower || beacon.txPower.toString().trim() === '') {
+      wx.showToast({
+        title: '信号功率不能为空',
+        icon: 'none'
       });
       return;
     }
     
-    if (!txPower) {
-      wx.showModal({
-        title: '输入错误',
-        content: '请输入信号功率',
-        showCancel: false
+    const x = parseFloat(beacon.x);
+    const y = parseFloat(beacon.y);
+    const txPower = parseFloat(beacon.txPower);
+    
+    if (isNaN(x) || isNaN(y)) {
+      wx.showToast({
+        title: '坐标必须是有效数字',
+        icon: 'none'
       });
       return;
     }
     
-    // 处理数据类型
-    const beaconData = {
-      uuid: uuid.trim(),
-      major: parseInt(major),
-      minor: parseInt(minor),
-      x: parseFloat(x),
-      y: parseFloat(y),
-      txPower: parseFloat(txPower)
+    if (isNaN(txPower)) {
+      wx.showToast({
+        title: '信号功率必须是有效数字',
+        icon: 'none'
+      });
+      return;
+    }
+    
+    // 构建Beacon对象（确保格式统一且数据类型正确）
+    const beaconToSave = {
+      uuid: beacon.uuid.trim().toUpperCase(), // 统一为大写
+      displayName: beacon.displayName ? beacon.displayName.trim() : beacon.uuid.trim(),
+      deviceId: beacon.deviceId || null,
+      major: beacon.major ? parseInt(beacon.major) : 0,
+      minor: beacon.minor ? parseInt(beacon.minor) : 0,
+      x: x,
+      y: y,
+      txPower: txPower
     };
     
-    // 生成唯一ID
-    beaconData.id = `${beaconData.uuid}-${beaconData.major}-${beaconData.minor}`;
-    
-    // 检查是否已存在相同的beacon
-    const isExisting = this.data.beacons.findIndex(b => 
-      b.uuid === beaconData.uuid && 
-      b.major === beaconData.major && 
-      b.minor === beaconData.minor && 
-      this.data.editingBeaconIndex !== this.data.beacons.indexOf(b)
-    );
-    
-    if (isExisting !== -1) {
+    // 验证UUID格式
+    const uuidRegex = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
+    if (!uuidRegex.test(beaconToSave.uuid)) {
+      console.warn('UUID格式不标准:', beaconToSave.uuid);
+      // 不阻止保存，但提出警告
       wx.showModal({
-        title: '添加失败',
-        content: '已存在相同UUID、Major和Minor的Beacon',
-        showCancel: false
+        title: 'UUID格式警告',
+        content: 'UUID格式不是标准格式，这可能导致Beacon无法正确匹配。是否仍然保存？',
+        success: (res) => {
+          if (res.confirm) {
+            this.saveBeaconData(beaconToSave);
+          }
+        }
       });
       return;
     }
     
-    // 更新或添加beacon
+    // 保存Beacon数据
+    this.saveBeaconData(beaconToSave);
+  },
+  
+  // 保存Beacon数据到列表和存储
+  saveBeaconData(beaconToSave) {
+    // 更新或添加Beacon
     const beacons = [...this.data.beacons];
     
-    if (this.data.beaconModalMode === 'edit' && this.data.editingBeaconIndex >= 0) {
-      // 编辑模式
-      beacons[this.data.editingBeaconIndex] = beaconData;
+    if (this.data.beaconModalMode === 'add') {
+      // 检查是否已存在相同UUID的Beacon
+      const existingIndex = beacons.findIndex(b => b.uuid === beaconToSave.uuid);
+      if (existingIndex >= 0) {
+        wx.showModal({
+          title: '重复UUID',
+          content: '已存在相同UUID的Beacon，是否更新现有配置？',
+          success: (res) => {
+            if (res.confirm) {
+              beacons[existingIndex] = beaconToSave;
+              this.finalizeBeaconSave(beacons, '更新成功');
+            }
+          }
+        });
+        return;
+      }
+      
+      // 添加新的Beacon
+      beacons.push(beaconToSave);
+      console.log('添加新Beacon成功');
+      
+      // 通知用户
+      this.finalizeBeaconSave(beacons, 'Beacon添加成功');
     } else {
-      // 添加模式
-      beacons.push(beaconData);
+      // 编辑现有Beacon
+      const index = this.data.editingBeaconIndex;
+      if (index >= 0 && index < beacons.length) {
+        beacons[index] = beaconToSave;
+        console.log('更新Beacon成功, 索引:', index);
+        
+        // 通知用户
+        this.finalizeBeaconSave(beacons, 'Beacon更新成功');
+      } else {
+        console.error('无效的Beacon索引:', index);
+        wx.showToast({
+          title: '更新失败：无效索引',
+          icon: 'none'
+        });
+        return;
+      }
     }
-    
-    // 更新数据
+  },
+  
+  // 完成Beacon保存操作
+  finalizeBeaconSave(beacons, successMessage) {
+    // 更新状态
     this.setData({
       beacons: beacons,
-      showBeaconModal: false
+      showBeaconModal: false,
+      editingBeacon: {
+        uuid: '',
+        major: '',
+        minor: '',
+        x: '',
+        y: '',
+        txPower: ''
+      }
     });
     
-    // 保存到全局数据和本地存储
-    app.globalData.beacons = beacons;
-    wx.setStorageSync('beacons', beacons);
-    
-    // 显示成功提示
-    wx.showToast({
-      title: this.data.beaconModalMode === 'edit' ? '编辑成功' : '添加成功',
-      icon: 'success'
-    });
-    
-    // 如果当前是地图标签页，立即更新地图显示
-    if (this.data.activeTab === 'map' && this.canvasInstance) {
-      // 获取Canvas绘图上下文
-      const ctx = this.canvasInstance.getContext('2d');
-      // 重新绘制地图和所有信标
-      this.drawJSONMap(ctx, this.canvasInstance.width, this.canvasInstance.height);
+    // 保存到本地存储
+    try {
+      // 1. 使用appManager保存到正确的存储中
+      appManager.saveBeaconsToStorage(beacons)
+        .then(() => {
+          console.log('Beacon列表已通过appManager保存');
+          
+          wx.showToast({
+            title: successMessage,
+            icon: 'success'
+          });
+        })
+        .catch(err => {
+          console.error('通过appManager保存Beacon失败:', err);
+          // 作为备份，同时保存到原来的存储位置
+          wx.setStorageSync('beacons', beacons);
+          app.globalData.beacons = beacons;
+          
+          wx.showToast({
+            title: successMessage,
+            icon: 'success'
+          });
+        });
+    } catch (e) {
+      console.error('保存Beacon列表失败:', e);
+      // 备份保存方式
+      wx.setStorageSync('beacons', beacons);
+      app.globalData.beacons = beacons;
+      
+      wx.showToast({
+        title: '保存失败',
+        icon: 'none'
+      });
     }
   },
   
@@ -505,127 +961,102 @@ Page({
       deletingBeaconIndex: -1
     });
     
-    // 保存到全局数据和本地存储
-    app.globalData.beacons = beacons;
-    wx.setStorageSync('beacons', beacons);
-    
-    wx.showToast({
-      title: '删除成功',
-      icon: 'success'
-    });
+    // 保存到appManager
+    try {
+      appManager.saveBeaconsToStorage(beacons)
+        .then(() => {
+          console.log('删除后的Beacon列表已通过appManager保存');
+          wx.showToast({
+            title: '删除成功',
+            icon: 'success'
+          });
+        })
+        .catch(err => {
+          console.error('删除后通过appManager保存Beacon失败:', err);
+          // 作为备份，保存到原来的存储
+          app.globalData.beacons = beacons;
+          wx.setStorageSync('beacons', beacons);
+          
+          wx.showToast({
+            title: '删除成功',
+            icon: 'success'
+          });
+        });
+    } catch (e) {
+      console.error('删除后保存Beacon失败:', e);
+      // 备份保存方式
+      app.globalData.beacons = beacons;
+      wx.setStorageSync('beacons', beacons);
+      
+      wx.showToast({
+        title: '删除成功',
+        icon: 'success'
+      });
+    }
   },
   
-  // 开始扫描Beacon，增加错误处理
+  // 开始扫描Beacon
   startScanBeacons() {
-    // 显示扫描结果弹窗
-    this.setData({
-      showScanResultModal: true,
-      isScanning: true,
-      scanResults: [],
-      bluetoothStatus: '初始化中',
-      lastAdvertData: '',
-      scannedDevicesCount: 0
-    });
+    if (this.data.isScanning) {
+      console.log('已经在扫描中，忽略重复请求');
+      return;
+    }
     
-    const that = this;
-    
-    // 先尝试关闭蓝牙适配器，以防已经打开
-    wx.closeBluetoothAdapter({
-      complete: function() {
-        console.log('尝试关闭蓝牙适配器');
-        // 无论成功失败，都继续初始化
-        that.initBluetooth();
-      }
-    });
+    // 初始化蓝牙
+    this.initBluetooth()
+      .then(() => {
+        this.setData({
+          isScanning: true,
+          showScanResultModal: true,
+          scanResults: [],
+          scannedDevicesCount: 0,
+          allDevices: []
+        });
+        
+        console.log('开始扫描Beacon设备');
+        this.startDiscovery();
+      })
+      .catch(err => {
+        this.showBluetoothError(err);
+      });
   },
   
   // 初始化蓝牙
   initBluetooth() {
-    const that = this;
-    
-    // 初始化蓝牙
-    wx.openBluetoothAdapter({
-      success: function() {
-        console.log('蓝牙适配器初始化成功');
-        that.setData({ bluetoothStatus: '已初始化' });
-        
-        // 获取蓝牙适配器状态
-        wx.getBluetoothAdapterState({
-          success: function(res) {
-            console.log('蓝牙适配器状态:', res);
-            that.setData({ 
-              bluetoothStatus: `可用: ${res.available}, 搜索中: ${res.discovering}` 
-            });
+    return new Promise((resolve, reject) => {
+      console.log('初始化蓝牙适配器');
+      this.setData({ bluetoothStatus: '初始化中...' });
+      
+      wx.openBluetoothAdapter({
+        success: (res) => {
+          console.log('蓝牙适配器初始化成功', res);
+          this.setData({ bluetoothStatus: '已初始化' });
+          
+          // 开始监听蓝牙适配器状态
+          wx.onBluetoothAdapterStateChange((res) => {
+            console.log('蓝牙适配器状态变化:', res);
             
-            if (res.available) {
-              if (res.discovering) {
-                // 如果已经在搜索，先停止
-                wx.stopBluetoothDevicesDiscovery({
-                  success: function() {
-                    that.startDiscovery();
-                  }
-                });
-              } else {
-                that.startDiscovery();
-              }
-            } else {
-              console.error('蓝牙适配器不可用');
-              that.setData({ 
-                isScanning: false,
-                bluetoothStatus: '蓝牙不可用'
-              });
+            const status = res.available ? (res.discovering ? '扫描中' : '已就绪') : '不可用';
+            this.setData({ bluetoothStatus: status });
+            
+            if (!res.available && this.data.isScanning) {
+              // 蓝牙变为不可用，停止扫描
+              this.stopScanBeacons();
               wx.showToast({
-                title: '蓝牙不可用',
+                title: '蓝牙已断开',
                 icon: 'none'
               });
             }
-          },
-          fail: function(err) {
-            console.error('获取蓝牙适配器状态失败', err);
-            that.setData({ 
-              isScanning: false,
-              bluetoothStatus: '获取状态失败: ' + err.errMsg
-            });
-          }
-        });
-      },
-      fail: function(err) {
-        console.error('初始化蓝牙适配器失败', err);
-        
-        // 如果错误是已经打开，则继续
-        if (err.errCode === 10001) {
-          console.log('蓝牙适配器已经打开，继续扫描');
-          that.setData({ bluetoothStatus: '蓝牙已打开，继续扫描' });
-          // 获取蓝牙适配器状态并继续
-          wx.getBluetoothAdapterState({
-            success: function(res) {
-              if (res.available) {
-                if (res.discovering) {
-                  wx.stopBluetoothDevicesDiscovery({
-                    complete: function() {
-                      that.startDiscovery();
-                    }
-                  });
-                } else {
-                  that.startDiscovery();
-                }
-              }
-            },
-            fail: function() {
-              that.showBluetoothError('无法获取蓝牙状态');
-            }
           });
-          return;
+          
+          resolve();
+        },
+        fail: (err) => {
+          console.error('蓝牙适配器初始化失败', err);
+          this.setData({ bluetoothStatus: '初始化失败' });
+          reject(err);
         }
-        
-        that.setData({ 
-          isScanning: false,
-          bluetoothStatus: '初始化失败: ' + err.errMsg
-        });
-        
-        // 显示更详细的错误信息
-        that.showBluetoothError(err);
-      }
+      });
     });
   },
   
@@ -649,96 +1080,94 @@ Page({
     });
   },
   
-  // 开始搜索设备
+  // 开始扫描设备
   startDiscovery() {
-    const that = this;
+    console.log('准备开始设备扫描');
     
-    // 开始搜索附近的蓝牙设备
+    // 配置模式下，扫描所有可见的蓝牙设备，不限于iBeacon
+    console.log('配置模式：扫描所有可见的蓝牙设备');
+    
+    // 开始搜索普通蓝牙设备，通过广播数据解析iBeacon
     wx.startBluetoothDevicesDiscovery({
-      allowDuplicatesKey: true, // 允许重复上报，以更新RSSI
-      powerLevel: 'high', // 高功率扫描
-      success: function() {
-        console.log('开始扫描蓝牙设备');
-        that.setData({ bluetoothStatus: '扫描中' });
+      allowDuplicatesKey: true, // 允许重复上报设备
+      success: (res) => {
+        console.log('开始蓝牙设备扫描成功:', res);
+        this.setData({ bluetoothStatus: '扫描中' });
         
-        // 先清除现有的监听器，避免重复
-        wx.offBluetoothDeviceFound();
-        
-        // 清空已扫描到的设备计数
-        that.setData({ 
-          scannedDevicesCount: 0,
-          allDevices: []
-        });
-        
-        // 监听设备发现事件
-        wx.onBluetoothDeviceFound(function(res) {
-          console.log('发现蓝牙设备:', res);
+        // 监听发现新设备事件
+        wx.onBluetoothDeviceFound((res) => {
+          if (!res.devices || res.devices.length === 0) {
+            return;
+          }
           
-          // 更新已扫描设备数
-          that.setData({ 
-            scannedDevicesCount: that.data.scannedDevicesCount + res.devices.length,
-            allDevices: [...that.data.allDevices, ...res.devices.map(d => d.deviceId)]
+          // 更新扫描计数
+          this.setData({
+            scannedDevicesCount: this.data.scannedDevicesCount + res.devices.length
           });
           
-          // 处理搜索到的设备
-          res.devices.forEach(function(device) {
-            // 尝试作为普通蓝牙设备添加
-            let isBeacon = false;
-            let beaconData = null;
+          // 处理找到的设备
+          res.devices.forEach(device => {
+            console.log('发现蓝牙设备:', device);
+            this.setData({
+              allDevices: [...this.data.allDevices, device]
+            });
             
-            // 调试信息：记录最近的广播数据
+            // 更新最新的广播数据用于调试
             if (device.advertisData) {
-              const hexData = Array.from(new Uint8Array(device.advertisData))
-                .map(b => '0x' + b.toString(16).padStart(2, '0'))
-                .join(' ');
+              this.setData({
+                lastAdvertData: Array.from(new Uint8Array(device.advertisData))
+                  .map(b => b.toString(16).padStart(2, '0'))
+                  .join(' ')
+              });
+            }
+            
+            // 尝试解析advertisData判断是否为iBeacon
+            if (device.advertisData) {
+              const iBeaconInfo = this.parseAdvertisData(device.advertisData);
               
-              console.log(`设备 ${device.deviceId} 广播数据:`, hexData);
-              that.setData({ lastAdvertData: hexData });
+              // 如果没有找到标准格式，尝试备用解析方法
+              const finalBeaconInfo = iBeaconInfo || this.parseAdvertisDataAlternative(device.advertisData);
               
-              // 尝试解析iBeacon数据
-              beaconData = that.parseAdvertisData(device.advertisData);
-              if (beaconData && beaconData.isIBeacon) {
-                isBeacon = true;
-                console.log('成功识别为iBeacon:', beaconData);
+              if (finalBeaconInfo && finalBeaconInfo.isIBeacon) {
+                console.log('找到iBeacon设备:', finalBeaconInfo);
+                
+                // 构建beacon对象
+                const beacon = {
+                  uuid: finalBeaconInfo.uuid,
+                  major: finalBeaconInfo.major || 0,
+                  minor: finalBeaconInfo.minor || 0,
+                  rssi: device.RSSI,
+                  deviceId: device.deviceId,
+                  txPower: finalBeaconInfo.txPower || -59 // 默认值
+                };
+                
+                // 添加到扫描结果
+                this.addBeaconToScanResults(beacon);
               }
             }
-            
-            // 如果是iBeacon，添加到结果中
-            if (isBeacon && beaconData) {
-              that.addBeaconToScanResults({
-                uuid: beaconData.uuid,
-                major: beaconData.major,
-                minor: beaconData.minor,
-                rssi: device.RSSI,
-                txPower: beaconData.txPower,
-                id: `${beaconData.uuid}-${beaconData.major}-${beaconData.minor}`
-              });
-            } 
-            // 如果不是iBeacon但有名称，也添加到列表
-            else if (device.name) {
-              // 一些设备可能不是标准的iBeacon格式，但仍可用于定位
-              console.log('添加普通蓝牙设备:', device.name);
-              that.addBeaconToScanResults({
-                uuid: device.deviceId || 'unknown',
-                major: undefined,
-                minor: undefined,
-                rssi: device.RSSI,
-                name: device.name,
-                id: device.deviceId
-              });
-            }
           });
         });
+        
+        // 30秒后自动停止扫描
+        setTimeout(() => {
+          if (this.data.isScanning) {
+            console.log('扫描超时，自动停止');
+            this.stopScanBeacons();
+          }
+        }, 30000);
       },
-      fail: function(err) {
-        console.error('开始搜索蓝牙设备失败', err);
-        that.setData({ 
-          isScanning: false,
-          bluetoothStatus: '扫描失败: ' + err.errMsg
+      fail: (err) => {
+        console.error('开始蓝牙设备扫描失败:', err);
+        this.setData({ 
+          isScanning: false, 
+          bluetoothStatus: '扫描失败'
         });
-        wx.showToast({
+        
+        // 显示错误信息
+        wx.showModal({
           title: '扫描失败',
-          icon: 'none'
+          content: '启动蓝牙设备扫描失败: ' + (err.errMsg || '未知错误'),
+          showCancel: false
         });
       }
     });
@@ -826,62 +1255,207 @@ Page({
     return null;
   },
   
+  // 添加一个备用的解析方法，专门处理特定厂商的iBeacon格式
+  parseAdvertisDataAlternative(advertisData) {
+    try {
+      console.log('尝试备用解析方法');
+      
+      // 将原始数据转换为十六进制数组，方便查看
+      const rawBytes = Array.from(new Uint8Array(advertisData))
+        .map(b => b.toString(16).padStart(2, '0'));
+      console.log('原始字节:', rawBytes);
+      
+      // 如果数据长度不足，无法解析
+      if (advertisData.byteLength < 25) {
+        console.log('数据长度不足，无法解析iBeacon格式');
+        return null;
+      }
+      
+      const buffer = new ArrayBuffer(advertisData.byteLength);
+      const dataView = new DataView(buffer);
+      
+      // 复制数据到新的buffer
+      for (let i = 0; i < advertisData.byteLength; i++) {
+        dataView.setUint8(i, new Uint8Array(advertisData)[i]);
+      }
+      
+      // 搜索特定模式
+      // 尝试查找iBeacon标记，通常在不同位置
+      let startIndex = -1;
+      
+      // 特别处理：有些设备可能会在不同位置包含iBeacon前缀
+      for (let i = 0; i < dataView.byteLength - 4; i++) {
+        // 标准iBeacon格式: 4C 00 02 15
+        if (dataView.getUint8(i) === 0x4C && 
+            dataView.getUint8(i+1) === 0x00 && 
+            dataView.getUint8(i+2) === 0x02 && 
+            dataView.getUint8(i+3) === 0x15) {
+          startIndex = i + 4;
+          console.log('找到标准iBeacon前缀，起始索引:', startIndex);
+          break;
+        }
+        // 简化版前缀: 02 15 (有些设备可能省略了公司ID)
+        else if (dataView.getUint8(i) === 0x02 && 
+                 dataView.getUint8(i+1) === 0x15) {
+          startIndex = i + 2;
+          console.log('找到简化iBeacon前缀，起始索引:', startIndex);
+          break;
+        }
+      }
+      
+      if (startIndex === -1) {
+        console.log('未找到iBeacon前缀');
+        return null;
+      }
+      
+      // 确保有足够的数据来解析UUID、Major、Minor和txPower
+      if (startIndex + 20 > dataView.byteLength) {
+        console.log('数据不足以解析完整的iBeacon');
+        return null;
+      }
+      
+      // 解析UUID
+      let uuid = '';
+      for (let i = startIndex; i < startIndex + 16; i++) {
+        let hex = dataView.getUint8(i).toString(16);
+        if (hex.length === 1) {
+          hex = '0' + hex;
+        }
+        uuid += hex;
+        
+        // 按照标准UUID格式添加连字符
+        if ((i - startIndex) === 3 || (i - startIndex) === 5 || 
+            (i - startIndex) === 7 || (i - startIndex) === 9) {
+          uuid += '-';
+        }
+      }
+      
+      // 解析Major和Minor值
+      const major = dataView.getUint16(startIndex + 16, false);
+      const minor = dataView.getUint16(startIndex + 18, false);
+      
+      // Tx Power通常在UUID、Major和Minor之后
+      const txPower = dataView.getInt8(startIndex + 20);
+      
+      console.log(`备用方法解析结果 - UUID: ${uuid}, Major: ${major}, Minor: ${minor}, TxPower: ${txPower}`);
+      
+      return {
+        isIBeacon: true,
+        uuid: uuid.toUpperCase(),
+        major: major,
+        minor: minor,
+        txPower: txPower
+      };
+    } catch (e) {
+      console.error('备用解析方法出错:', e);
+      return null;
+    }
+  },
+  
   // 添加扫描到的beacon到结果列表
   addBeaconToScanResults(beacon) {
-    // 检查是否已存在于已配置的Beacon列表中 - 仅根据UUID去重
-    const isConfigured = this.data.beacons.some(item => 
-      item.uuid === beacon.uuid
-    );
-    
-    // 如果已配置过，忽略此Beacon
-    if (isConfigured) {
-      console.log('忽略已配置的Beacon UUID:', beacon.uuid);
-      return;
-    }
-    
-    // 检查是否已存在相同的beacon在扫描结果中
-    const index = this.data.scanResults.findIndex(item => item.id === beacon.id);
-    
-    if (index >= 0) {
-      // 更新已有的beacon
-      const scanResults = [...this.data.scanResults];
-      scanResults[index] = beacon;
-      this.setData({ scanResults });
-    } else {
-      // 添加新的beacon
-      this.setData({
-        scanResults: [...this.data.scanResults, beacon]
-      });
+    try {
+      // 确保beacon对象有效
+      if (!beacon || !beacon.uuid) {
+        console.warn('无效的Beacon数据，跳过', beacon);
+        return;
+      }
+      
+      console.log('处理扫描到的Beacon:', beacon);
+      
+      // 检查是否已存在相同的beacon (基于UUID-major-minor组合)
+      const beaconId = `${beacon.uuid}-${beacon.major || 0}-${beacon.minor || 0}`;
+      const existingIndex = this.data.scanResults.findIndex(item => 
+        item.uuid === beacon.uuid && 
+        item.major === beacon.major && 
+        item.minor === beacon.minor
+      );
+      
+      // 构建beacon信息对象
+      const beaconInfo = {
+        uuid: beacon.uuid,
+        major: beacon.major,
+        minor: beacon.minor,
+        rssi: beacon.rssi,
+        accuracy: beacon.accuracy,
+        proximity: beacon.proximity,
+        deviceId: beacon.deviceId || '',
+        // 使用displayName或从UUID生成的简短名称
+        displayName: beacon.deviceId ? `Beacon (${beacon.major},${beacon.minor})` : beacon.uuid.substring(0, 8)
+      };
+      
+      // 如果已存在，更新RSSI；否则添加到列表
+      if (existingIndex >= 0) {
+        // 更新RSSI
+        const updatedResults = [...this.data.scanResults];
+        updatedResults[existingIndex].rssi = beacon.rssi;
+        updatedResults[existingIndex].accuracy = beacon.accuracy;
+        updatedResults[existingIndex].proximity = beacon.proximity;
+        
+        this.setData({
+          scanResults: updatedResults
+        });
+        
+        console.log(`更新已存在的Beacon RSSI: ${beacon.rssi}dBm`);
+      } else {
+        // 添加新的beacon
+        this.setData({
+          scanResults: [...this.data.scanResults, beaconInfo]
+        });
+        
+        console.log('添加新的Beacon到扫描结果:', beaconInfo);
+      }
+    } catch (err) {
+      console.error('添加Beacon到扫描结果时出错', err);
     }
   },
   
   // 从扫描结果中选择beacon
   selectBeaconFromScan(e) {
-    console.log('选择扫描到的Beacon:', e);
     const index = e.currentTarget.dataset.index;
     const beacon = this.data.scanResults[index];
     
-    console.log('选中的beacon:', beacon);
+    if (!beacon || !beacon.uuid) {
+      console.error('选择的Beacon数据无效');
+      wx.showToast({
+        title: '选择的设备无效',
+        icon: 'none'
+      });
+      return;
+    }
     
-    // 使用选中的beacon初始化表单
+    console.log('选择Beacon:', beacon);
+    
+    // 停止扫描
+    this.stopScanBeacons();
+    
+    // 隐藏扫描结果弹窗
     this.setData({
-      showScanResultModal: false,
-      isScanning: false,
+      showScanResultModal: false
+    });
+    
+    // 打开beacon编辑弹窗，填入扫描数据
+    this.setData({
       showBeaconModal: true,
       beaconModalMode: 'add',
       editingBeaconIndex: -1,
       editingBeacon: {
-        uuid: beacon.uuid || '',
-        major: beacon.major !== undefined ? beacon.major.toString() : '0',
-        minor: beacon.minor !== undefined ? beacon.minor.toString() : '0',
+        uuid: beacon.uuid,
+        major: beacon.major || 0,
+        minor: beacon.minor || 0,
+        deviceId: beacon.deviceId || '',
+        displayName: beacon.displayName || beacon.uuid.substring(0, 8),
         x: '',
         y: '',
-        txPower: beacon.txPower ? beacon.txPower.toString() : '-59' // 默认值
+        txPower: -59 // 默认值
       }
     });
     
-    // 停止扫描
-    this.stopScanBeacons();
+    // 提示用户添加位置信息
+    wx.showToast({
+      title: '请设置位置信息',
+      icon: 'none'
+    });
   },
   
   // 停止扫描Beacon
@@ -891,13 +1465,15 @@ Page({
       bluetoothStatus: '已停止扫描'
     });
     
+    console.log('停止蓝牙设备扫描');
+    
     // 停止搜索蓝牙设备
     wx.stopBluetoothDevicesDiscovery({
       success: function(res) {
-        console.log('停止扫描成功:', res);
+        console.log('停止蓝牙设备扫描成功:', res);
       },
       fail: function(err) {
-        console.error('停止扫描失败:', err);
+        console.error('停止蓝牙设备扫描失败:', err);
       },
       complete: function() {
         // 解除监听器
@@ -1212,39 +1788,46 @@ Page({
     }
   },
   
-  // 确认选择的坐标
+  // 确认坐标选择
   confirmCoordinateSelection() {
-    if (!this.data.tempSelectedCoords) {
+    const { tempSelectedCoords, tempBeaconData } = this.data;
+    
+    if (!tempSelectedCoords) {
       wx.showToast({
-        title: '请先选择位置',
+        title: '请先在地图上选择坐标',
         icon: 'none'
       });
       return;
     }
     
-    // 获取临时保存的beacon数据和选中的坐标
-    const tempBeacon = this.data.tempBeaconData || {};
-    const { x, y } = this.data.tempSelectedCoords;
+    console.log('确认选择坐标:', tempSelectedCoords);
     
-    // 更新坐标并返回编辑弹窗
-    this.setData({
-      coordSelectMode: false,  // 关闭坐标选择模式
-      showBeaconModal: true,   // 重新显示编辑弹窗
-      editingBeacon: {
-        ...tempBeacon,
-        x: x.toFixed(2),
-        y: y.toFixed(2)
-      }
-    });
+    // 确保有beacon数据
+    if (!tempBeaconData) {
+      console.error('没有临时beacon数据，无法确认坐标');
+      return;
+    }
     
-    // 使用统一的函数清理临时选择点并重绘地图
+    // 更新beacon数据中的坐标
+    const updatedBeacon = {
+      ...tempBeaconData,
+      x: tempSelectedCoords.x,
+      y: tempSelectedCoords.y
+    };
+    
+    // 清理临时状态
     this.coordinateSelectionCleanup();
     
-    // 显示成功提示
-    wx.showToast({
-      title: '位置已确认',
-      icon: 'success'
+    // 更新编辑中的beacon数据和显示
+    this.setData({
+      editingBeacon: updatedBeacon,
+      [`editingBeacon.x`]: tempSelectedCoords.x.toFixed(2),
+      [`editingBeacon.y`]: tempSelectedCoords.y.toFixed(2),
+      activeTab: 'beacon', // 切回beacon配置tab
+      showBeaconModal: true // 确保beacon编辑弹窗显示
     });
+    
+    console.log('坐标更新完成, 返回beacon配置');
   },
   
   // 像素坐标转米坐标
@@ -1341,21 +1924,51 @@ Page({
   drawJSONMap(ctx, canvasWidth, canvasHeight) {
     const jsonData = this.data.mapInfo.jsonContent;
     
-    if (!jsonData || !jsonData.entities || !jsonData.entities.length) {
-      console.error('无效的JSON地图数据');
+    if (!jsonData) {
+      console.error('地图数据为空');
       
       // 绘制错误提示
       ctx.fillStyle = 'red';
       ctx.font = '14px sans-serif';
-      ctx.fillText('无效的JSON地图数据', 20, 30);
+      ctx.fillText('地图数据为空', 20, 30);
+      return;
+    }
+    
+    if (!jsonData.entities) {
+      console.error('地图数据缺少entities字段');
+      
+      // 绘制错误提示
+      ctx.fillStyle = 'red';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('地图数据缺少entities字段', 20, 30);
+      return;
+    }
+    
+    if (!Array.isArray(jsonData.entities)) {
+      console.error('地图数据的entities不是数组');
+      
+      // 绘制错误提示
+      ctx.fillStyle = 'red';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('地图数据的entities不是数组', 20, 30);
       return;
     }
     
     console.log('开始渲染JSON地图', jsonData);
     
     // 计算缩放以适应canvas
-    const mapWidth = jsonData.width;
-    const mapHeight = jsonData.height;
+    const mapWidth = jsonData.width || 10; // 提供默认值，避免除以零
+    const mapHeight = jsonData.height || 10; // 提供默认值，避免除以零
+    
+    if (mapWidth <= 0 || mapHeight <= 0) {
+      console.error('地图尺寸无效:', mapWidth, mapHeight);
+      
+      // 绘制错误提示
+      ctx.fillStyle = 'red';
+      ctx.font = '14px sans-serif';
+      ctx.fillText('地图尺寸无效', 20, 30);
+      return;
+    }
     
     const scale = Math.min(
       (canvasWidth - 40) / mapWidth,  // 留出更多边距
@@ -1420,33 +2033,56 @@ Page({
     let drawnEntities = 0;
     
     jsonData.entities.forEach(entity => {
-      if (entity.type === 'polyline' && entity.points && entity.points.length > 0) {
-        ctx.beginPath();
-        
-        // 移动到第一个点
-        const startX = entity.points[0][0] * scale + offsetX;
-        const startY = offsetY + mapHeight * scale - entity.points[0][1] * scale; // 反转Y轴
-        ctx.moveTo(startX, startY);
-        
-        // 连接所有点
-        for (let i = 1; i < entity.points.length; i++) {
-          const x = entity.points[i][0] * scale + offsetX;
-          const y = offsetY + mapHeight * scale - entity.points[i][1] * scale; // 反转Y轴
-          ctx.lineTo(x, y);
+      if (!entity || typeof entity !== 'object') {
+        console.warn('跳过无效的实体:', entity);
+        return;
+      }
+      
+      if (entity.type === 'polyline' && entity.points && Array.isArray(entity.points) && entity.points.length > 0) {
+        try {
+          ctx.beginPath();
+          
+          // 检查第一个点是否有效
+          if (!Array.isArray(entity.points[0]) || entity.points[0].length < 2) {
+            console.warn('无效的点坐标:', entity.points[0]);
+            return;
+          }
+          
+          // 移动到第一个点
+          const startX = entity.points[0][0] * scale + offsetX;
+          const startY = offsetY + mapHeight * scale - entity.points[0][1] * scale; // 反转Y轴
+          ctx.moveTo(startX, startY);
+          
+          // 连接所有点
+          for (let i = 1; i < entity.points.length; i++) {
+            if (!Array.isArray(entity.points[i]) || entity.points[i].length < 2) {
+              console.warn('无效的点坐标，索引:', i, entity.points[i]);
+              continue;
+            }
+            
+            const x = entity.points[i][0] * scale + offsetX;
+            const y = offsetY + mapHeight * scale - entity.points[i][1] * scale; // 反转Y轴
+            ctx.lineTo(x, y);
+          }
+          
+          // 如果是闭合的，连接回起点
+          if (entity.closed) {
+            ctx.closePath();
+          }
+          
+          // 使用颜色填充
+          ctx.fillStyle = entity.fillColor || 'rgba(240, 248, 255, 0.5)'; // 浅蓝色半透明
+          ctx.fill();
+          
+          // 绘制边框
+          ctx.strokeStyle = entity.strokeColor || '#333333';
+          ctx.stroke();
+          drawnEntities++;
+        } catch (err) {
+          console.error('绘制实体时出错:', err, entity);
         }
-        
-        // 如果是闭合的，连接回起点
-        if (entity.closed) {
-          ctx.closePath();
-        }
-        
-        // 使用颜色填充
-        ctx.fillStyle = 'rgba(240, 248, 255, 0.5)'; // 浅蓝色半透明
-        ctx.fill();
-        
-        // 绘制边框
-        ctx.stroke();
-        drawnEntities++;
+      } else {
+        console.warn('不支持的实体类型或实体缺少points:', entity.type);
       }
     });
     

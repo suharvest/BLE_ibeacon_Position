@@ -1,56 +1,76 @@
 <!--index.wxml-->
 <view class="container">
-  <view class="map-container">
-    <canvas class="map-canvas" type="2d" id="mapCanvas"></canvas>
-
-    <!-- 当未配置地图和Beacon时显示提示 -->
-    <view class="placeholder" wx:if="{{!hasMap}}">
-      <view class="placeholder-text">未加载地图</view>
-      <button class="btn" bindtap="goToConfig">前往配置</button>
-    </view>
-    <view class="placeholder" wx:elif="{{!hasBeacons}}">
-      <view class="placeholder-text">未配置Beacon</view>
-      <button class="btn" bindtap="goToConfig">前往配置</button>
-    </view>
+  <!-- 导航栏 -->
+  <view class="header">
+    <view class="title">信标定位</view>
+    <view class="subtitle">室内位置追踪</view>
   </view>
   
-  <view class="control-panel">
-    <view class="status-info">
-      <view class="status-item">
-        <text class="label">当前位置:</text>
-        <text class="value">{{currentPosition ? currentPosition.x.toFixed(2) + ', ' + currentPosition.y.toFixed(2) + ' 米' : '未定位'}}</text>
-      </view>
-      <view class="status-item">
-        <text class="label">检测到Beacon:</text>
-        <text class="value">{{detectedBeaconCount}}</text>
-      </view>
-      <view class="status-item">
-        <text class="label">定位状态:</text>
-        <text class="value {{isLocating ? 'active' : ''}}">{{isLocating ? '活跃' : '未启动'}}</text>
-      </view>
+  <!-- 地图区域 -->
+  <view class="map-container">
+    <canvas id="mapCanvas" type="2d" class="map-canvas"></canvas>
+    
+    <!-- 未配置地图或信标的提示 -->
+    <view class="map-placeholder" wx:if="{{!hasMap || !hasBeacons}}">
+      <text wx:if="{{!hasMap}}">请先配置地图</text>
+      <text wx:elif="{{!hasBeacons}}">请先配置信标</text>
+      <button class="config-btn" bindtap="goToConfig">前往配置</button>
     </view>
     
-    <view class="btn-group">
-      <button class="btn {{isLocating ? 'btn-stop' : 'btn-start'}}" bindtap="toggleLocating">
-        {{isLocating ? '停止定位' : '开始定位'}}
-      </button>
+    <!-- 错误信息提示 -->
+    <view class="error-message" wx:if="{{errorMessage}}">
+      <text>错误: {{errorMessage}}</text>
     </view>
   </view>
   
-  <!-- 调试面板，显示检测到的beacon详情 -->
-  <view class="debug-panel" wx:if="{{showDebugInfo}}">
-    <view class="panel-header" bindtap="toggleDebugPanel">
-      <text>调试信息</text>
-      <text class="toggle-icon">{{debugPanelExpanded ? '▼' : '▲'}}</text>
+  <!-- 控制按钮区域 -->
+  <view class="controls">
+    <button class="locate-btn {{isLocating ? 'stop' : 'start'}}" bindtap="toggleLocating" 
+            disabled="{{!hasMap || !hasBeacons || bluetoothState !== 'available'}}">
+      {{isLocating ? '停止定位' : '开始定位'}}
+    </button>
+    
+    <!-- 蓝牙状态提示 -->
+    <view class="bluetooth-status">
+      <text class="status-text">蓝牙状态:</text>
+      <text class="status-value {{bluetoothState === 'available' ? 'available' : 'unavailable'}}">
+        {{bluetoothState === 'available' ? '可用' : 
+          bluetoothState === 'unauthorized' ? '未授权' : 
+          bluetoothState === 'closed' ? '已关闭' : '不可用'}}
+      </text>
     </view>
-    <view class="panel-content" wx:if="{{debugPanelExpanded}}">
-      <view class="detected-beacons">
-        <view class="beacon-item" wx:for="{{beaconsWithDistance}}" wx:key="id">
-          <view class="beacon-info">
-            <text class="beacon-id">{{item.id}}</text>
-            <text class="beacon-data">位置: ({{item.x.toFixed(2)}}, {{item.y.toFixed(2)}})</text>
-            <text class="beacon-data">RSSI: {{item.rssi.toFixed(1)}} dBm</text>
-            <text class="beacon-data">距离: {{item.distance.toFixed(2)}} 米</text>
+  </view>
+  
+  <!-- 调试信息区域 -->
+  <view class="debug-container" wx:if="{{showDebugInfo}}">
+    <view class="debug-header" bindtap="toggleDebugPanel">
+      <text>调试信息</text>
+      <text class="toggle-icon">{{debugPanelExpanded ? '▼' : '▶'}}</text>
+    </view>
+    
+    <view class="debug-content" wx:if="{{debugPanelExpanded}}">
+      <!-- 基本信息 -->
+      <view class="debug-section">
+        <view class="debug-item">
+          <text class="label">检测到的信标:</text>
+          <text class="value">{{detectedBeaconCount}}</text>
+        </view>
+        
+        <view class="debug-item" wx:if="{{currentPosition}}">
+          <text class="label">当前位置:</text>
+          <text class="value">({{currentPosition.x.toFixed(2)}}, {{currentPosition.y.toFixed(2)}})</text>
+        </view>
+      </view>
+      
+      <!-- 信标详情 -->
+      <view class="beacon-details" wx:if="{{beaconsWithDistance.length > 0}}">
+        <text class="section-title">信标详情:</text>
+        <view class="beacon-list">
+          <view class="beacon-item" wx:for="{{beaconsWithDistance}}" wx:key="index">
+            <text class="beacon-name">{{item.name || item.uuid}}</text>
+            <text class="beacon-info">距离: {{item.distance ? item.distance.toFixed(2) + 'm' : '未知'}}</text>
+            <text class="beacon-info">RSSI: {{item.rssi}}dBm</text>
+            <text class="beacon-info">坐标: ({{item.x.toFixed(2)}}, {{item.y.toFixed(2)}})</text>
           </view>
         </view>
       </view>

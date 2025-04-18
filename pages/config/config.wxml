@@ -31,7 +31,7 @@
         <view class="beacon-info">
           <view class="beacon-name">
             <text class="beacon-index">{{index + 1}}.</text>
-            <text>{{item.uuid}}</text>
+            <text>{{item.displayName || item.deviceId || item.uuid}}</text>
           </view>
           <view class="beacon-details">
             <text>Major: {{item.major}}, Minor: {{item.minor}}</text>
@@ -150,6 +150,10 @@
     </view>
     <view class="modal-body">
       <view class="form-group">
+        <view class="form-label">设备标识</view>
+        <input class="form-input" value="{{editingBeacon.displayName}}" bindinput="updateBeaconField" data-field="displayName" placeholder="设备名称或MAC地址"/>
+      </view>
+      <view class="form-group">
         <view class="form-label">UUID</view>
         <input class="form-input" value="{{editingBeacon.uuid}}" bindinput="updateBeaconField" data-field="uuid" placeholder="Beacon UUID"/>
       </view>
@@ -223,7 +227,7 @@
         <view class="scan-result-item" wx:for="{{scanResults}}" wx:key="id" bindtap="selectBeaconFromScan" data-index="{{index}}">
           <view class="beacon-info">
             <view class="beacon-name">
-              <text>{{item.name ? item.name : item.uuid}}</text>
+              <text>{{item.displayName || item.deviceId || item.name || item.uuid}}</text>
             </view>
             <view class="beacon-details">
               <text>{{item.major !== undefined ? 'Major: ' + item.major + ', Minor: ' + item.minor : '非标准iBeacon'}}</text>

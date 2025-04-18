@@ -628,4 +628,9 @@
   opacity: 0.5;
   background-color: #cccccc;
   pointer-events: none;
-} 
+}
+
+/* Test button styles removed */
+
+/* Replace the test button styles with an empty comment */
+/* Test button styles removed */ 
