@@ -18,7 +18,7 @@ Page({
       fileType: 'json' // 仅支持JSON
     },
     signalPathLossExponent: 2.5, // 信号传播因子n
-
+    
     // --- 弹窗状态 ---
     showBeaconModal: false, // 是否显示Beacon编辑弹窗
     beaconModalMode: 'add', // 弹窗模式：add, edit
@@ -59,7 +59,7 @@ Page({
   onLoad() {
     this.loadData();
   },
-
+  
   onShow() {
     // 每次显示页面时，检查是否需要重新加载数据或更新状态
     this.loadData(); // 重新加载数据以同步最新状态
@@ -129,7 +129,7 @@ Page({
       });
       // --- End Revised Map Loading Logic ---
 
-    } else {
+        } else {
       // appManager不可用时的备用方案
       console.error('appManager未初始化或不可用，尝试从本地存储加载');
       this.loadFromLocalStorage();
@@ -164,7 +164,7 @@ Page({
             }
       } // Else: Keep unsaved map
 
-      this.setData({
+              this.setData({ 
         beacons: Array.isArray(beacons) ? beacons : [],
         mapInfo: mapToSet,
         signalPathLossExponent: (factor && !isNaN(parseFloat(factor))) ? parseFloat(factor) : this.data.signalPathLossExponent
@@ -199,9 +199,9 @@ Page({
       .catch(err => {
         console.error('通过appManager保存Beacon失败:', err);
         wx.showToast({ title: '保存失败', icon: 'none' });
-      });
+    });
   },
-
+  
   // 保存地图配置 (通过appManager)
   saveMapConfigAction() {
     console.log('[saveMapConfigAction] Function called.');
@@ -218,10 +218,10 @@ Page({
         console.log('[saveMapConfigAction] appManager.loadMapData resolved (Success).');
         wx.hideLoading();
         wx.showToast({ title: '地图配置已保存', icon: 'success' });
-        // 重新绘制预览
+    // 重新绘制预览
         wx.nextTick(() => { // 确保在下一个事件循环绘制
             if (this.data.activeTab === 'map') {
-                this.initMapPreview(); 
+    this.initMapPreview();
             }
         });
       })
@@ -249,9 +249,9 @@ Page({
         wx.showToast({ title: '保存失败', icon: 'none' });
         // 可选：增加本地备份保存
         // wx.setStorageSync('signalPathLossExponent', factor);
-      });
+    });
   },
-
+  
   // --- NEW: Function to handle slider change ---
   updateSignalFactor(e) {
     if (e && e.detail) {
@@ -285,10 +285,10 @@ Page({
 
   // --- Beacon 配置相关 ---
   showAddBeaconModal() {
-    this.setData({
-      showBeaconModal: true,
-      beaconModalMode: 'add',
-      editingBeaconIndex: -1,
+      this.setData({
+        showBeaconModal: true,
+        beaconModalMode: 'add',
+        editingBeaconIndex: -1,
       editingBeacon: { uuid: '', major: '', minor: '', x: '', y: '', txPower: '-59' }
     });
   },
@@ -303,21 +303,21 @@ Page({
       editingBeacon: { ...beacon } // 复制一份进行编辑
     });
   },
-
+  
   hideBeaconModal() {
     this.setData({ showBeaconModal: false });
     // 关闭弹窗时清理地图选点状态
     if (this.data.coordSelectMode) {
-        this.coordinateSelectionCleanup();
+    this.coordinateSelectionCleanup();
     }
   },
-
+  
   updateBeaconField(e) {
     const field = e.currentTarget.dataset.field;
     const value = e.detail.value;
     this.setData({ [`editingBeacon.${field}`]: value });
   },
-
+  
   confirmBeaconEdit() {
     const beacon = this.data.editingBeacon;
     // 数据验证
@@ -377,7 +377,7 @@ Page({
         b.minor === beaconToSave.minor
       );
       if (existingIndex >= 0) {
-        wx.showModal({
+      wx.showModal({
           title: '重复Beacon',
           content: '已存在相同UUID/Major/Minor的Beacon，是否覆盖更新？',
           success: (res) => {
@@ -406,12 +406,12 @@ Page({
         );
         if (conflictIndex >= 0) {
           wx.showToast({ title: '编辑失败：与其他Beacon冲突', icon: 'none' });
-          return;
-        }
+      return;
+    }
         beacons[index] = beaconToSave;
         successMessage = 'Beacon更新成功';
         shouldUpdatePreview = true;
-      } else {
+    } else {
         console.error('无效的Beacon索引:', index);
         wx.showToast({ title: '更新失败：无效索引', icon: 'none' });
         return;
@@ -433,24 +433,24 @@ Page({
   cancelDelete() {
     this.setData({ showDeleteConfirmModal: false, deletingBeaconIndex: -1 });
   },
-
+  
   confirmDelete() {
     const index = this.data.deletingBeaconIndex;
     if (index < 0 || index >= this.data.beacons.length) { this.cancelDelete(); return; }
 
     const beacons = [...this.data.beacons];
     beacons.splice(index, 1);
-
+    
     // 使用 setData 回调确保状态更新后再保存和刷新预览
-    this.setData({ 
-        beacons: beacons, 
-        showDeleteConfirmModal: false, 
-        deletingBeaconIndex: -1 
+    this.setData({
+      beacons: beacons,
+      showDeleteConfirmModal: false,
+      deletingBeaconIndex: -1
     }, () => {
         this.saveBeaconList(beacons, '删除成功');
     });
   },
-
+  
   // --- Beacon 扫描相关 ---
   startScanBeacons() {
     if (this.data.isScanning) { return; }
@@ -464,7 +464,7 @@ Page({
 
   initBluetooth() {
     return new Promise((resolve, reject) => {
-      wx.openBluetoothAdapter({
+    wx.openBluetoothAdapter({
         success: (res) => {
           wx.onBluetoothAdapterStateChange((res) => {
             if (!res.available && this.data.isScanning) {
@@ -512,7 +512,7 @@ Page({
       res.devices.forEach(device => {
           // --- REMOVE Raw Device Info Log ---
           // console.log(`[handleDeviceFound] Detected Device: ID=${device.deviceId}, Name=${device.name}, LocalName=${device.localName}`);
-          if (device.advertisData) {
+            if (device.advertisData) {
               // --- REMOVE Adv Data Log ---
               // try {
               //     const hexAdvData = Array.prototype.map.call(new Uint8Array(device.advertisData), x => ('00' + x.toString(16)).slice(-2)).join(' ');
@@ -532,8 +532,8 @@ Page({
                   // console.log(`[handleDeviceFound] Parsed as iBeacon:`, JSON.stringify(beaconInfo));
                   this.addBeaconToScanResults({
                       ...beaconInfo,
-                      rssi: device.RSSI,
-                      deviceId: device.deviceId,
+                rssi: device.RSSI,
+                deviceId: device.deviceId,
                       name: device.name,
                       localName: device.localName
                   });
@@ -545,10 +545,10 @@ Page({
               // --- END REMOVE Parsing Result Log ---
           } else {
               // console.log(`[handleDeviceFound] Device ${device.deviceId || '(no ID)'} has no AdvData.`);
-          }
-      });
+      }
+    });
   },
-
+  
   // 标准iBeacon解析 (主要依据Apple规范)
   parseAdvertisDataStandard(advertisData) {
       try {
@@ -558,37 +558,37 @@ Page({
               if (dataView.getUint8(i) === 0x4C && dataView.getUint8(i + 1) === 0x00 &&
                   dataView.getUint8(i + 2) === 0x02 && dataView.getUint8(i + 3) === 0x15) {
                   const startIndex = i + 4;
-                  let uuid = '';
+          let uuid = '';
                   for (let j = 0; j < 16; j++) {
                       uuid += dataView.getUint8(startIndex + j).toString(16).padStart(2, '0');
                       if (j === 3 || j === 5 || j === 7 || j === 9) uuid += '-';
                   }
                   const major = dataView.getUint16(startIndex + 16, false); // Big-endian
                   const minor = dataView.getUint16(startIndex + 18, false); // Big-endian
-                  const txPower = dataView.getInt8(startIndex + 20);
+          const txPower = dataView.getInt8(startIndex + 20);
                   return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
               }
           }
       } catch (e) { /* console.error('标准解析错误', e); */ } // Keep error silent
-      return null;
+    return null;
   },
-
+  
   // 备用iBeacon解析 (针对可能省略Apple ID的情况)
   parseAdvertisDataAlternative(advertisData) {
-      try {
+    try {
           const dataView = new DataView(advertisData);
           // 查找 02 15 (iBeacon type and length)
           for (let i = 0; i <= dataView.byteLength - 23; i++) { // 至少需要23字节
               if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
                   const startIndex = i + 2;
-                  let uuid = '';
+      let uuid = '';
                   for (let j = 0; j < 16; j++) {
                       uuid += dataView.getUint8(startIndex + j).toString(16).padStart(2, '0');
                       if (j === 3 || j === 5 || j === 7 || j === 9) uuid += '-';
                   }
-                  const major = dataView.getUint16(startIndex + 16, false);
-                  const minor = dataView.getUint16(startIndex + 18, false);
-                  const txPower = dataView.getInt8(startIndex + 20);
+      const major = dataView.getUint16(startIndex + 16, false);
+      const minor = dataView.getUint16(startIndex + 18, false);
+      const txPower = dataView.getInt8(startIndex + 20);
                   return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
               }
           }
@@ -623,7 +623,7 @@ Page({
         // console.log(`[addBeaconToScanResults] Device ID ${beacon.deviceId || '(none)'} not configured, proceeding.`);
     }
 
-    const scanResults = [...this.data.scanResults];
+      const scanResults = [...this.data.scanResults];
     // Check for duplicates within the *scan results list itself* based on UUID/Major/Minor
     const existingIndex = scanResults.findIndex(item =>
         item.uuid === beacon.uuid &&
@@ -667,12 +667,12 @@ Page({
     }
     this.stopScanBeacons();
     this.setData({ showScanResultModal: false });
-
+    
     // --- Modified displayName Population ---
     // Pre-fill displayName with discovered name, allow user to edit
     const prefilledDisplayName = beacon.displayName; // Already derived in addBeaconToScanResults
     // --- End Modification ---
-
+    
     this.setData({
       showBeaconModal: true,
       beaconModalMode: 'add',
@@ -702,7 +702,7 @@ Page({
     this.stopScanBeacons();
     this.setData({ showScanResultModal: false });
   },
-
+  
   // --- 地图预览与交互 ---
   initMapPreview() {
     if (this.initMapPreviewInProgress) { return; }
@@ -719,7 +719,7 @@ Page({
           return;
         }
         const canvas = res[0].node;
-        this.canvasInstance = canvas;
+    this.canvasInstance = canvas;
         if (!canvas || typeof canvas.getContext !== 'function') {
           console.error('Canvas节点无效'); return;
         }
@@ -834,7 +834,7 @@ Page({
       if (this.data.activeTab === 'map') {
           if (this.canvasContext && this.data.mapInfo && this.data.mapInfo.jsonContent) {
               this.drawJSONMap(this.canvasContext, this.canvasInstance.width / wx.getSystemInfoSync().pixelRatio, this.canvasInstance.height / wx.getSystemInfoSync().pixelRatio);
-          } else {
+        } else {
               this.initMapPreview(); // 尝试重新初始化以显示提示
           }
       }
@@ -842,7 +842,7 @@ Page({
 
   cancelCoordinateSelection() {
       const tempBeacon = this.data.tempBeaconData;
-      this.setData({
+    this.setData({
           coordSelectMode: false,
           tempSelectedCoords: null,
           tempBeaconData: null,
@@ -887,12 +887,12 @@ Page({
     const scale = Math.min((canvasWidth - 40) / mapWidth, (canvasHeight - 40) / mapHeight) * 0.9;
     const offsetX = (canvasWidth - mapWidth * scale) / 2;
     const offsetY = (canvasHeight - mapHeight * scale) / 2;
-
+    
     // 保存绘制参数到实例变量
     this.mapScale = scale;
     this.mapOffset = { x: offsetX, y: offsetY };
     this.mapSize = { width: mapWidth, height: mapHeight };
-
+    
     // 清空画布
     ctx.clearRect(0, 0, canvasWidth, canvasHeight);
     ctx.fillStyle = '#f8f8f8'; ctx.fillRect(0, 0, canvasWidth, canvasHeight);
@@ -901,7 +901,7 @@ Page({
     ctx.strokeStyle = '#eeeeee'; ctx.lineWidth = 0.5;
     for (let y = 0; y <= mapHeight; y += 1) { const screenY = this.meterToPixel(0, y)?.y; if (screenY === null) continue; ctx.beginPath(); ctx.moveTo(offsetX, screenY); ctx.lineTo(offsetX + mapWidth * scale, screenY); ctx.stroke(); }
     for (let x = 0; x <= mapWidth; x += 1) { const screenX = this.meterToPixel(x, 0)?.x; if (screenX === null) continue; ctx.beginPath(); ctx.moveTo(screenX, offsetY); ctx.lineTo(screenX, offsetY + mapHeight * scale); ctx.stroke(); }
-
+    
     // 绘制地图边界
     ctx.strokeStyle = '#999999'; ctx.lineWidth = 1;
     ctx.strokeRect(offsetX, offsetY, mapWidth * scale, mapHeight * scale);
@@ -910,7 +910,7 @@ Page({
     ctx.strokeStyle = '#333333'; ctx.lineWidth = 1.5;
     jsonData.entities.forEach(entity => {
       if (entity && entity.type === 'polyline' && Array.isArray(entity.points) && entity.points.length >= 2) {
-        ctx.beginPath();
+      ctx.beginPath();
         const startPixel = this.meterToPixel(entity.points[0][0], entity.points[0][1]);
         if (!startPixel) return;
         ctx.moveTo(startPixel.x, startPixel.y);
@@ -926,8 +926,8 @@ Page({
           ctx.fillStyle = entity.fillColor || 'rgba(220, 220, 220, 0.5)';
           ctx.fill();
         }
-        ctx.stroke();
-      }
+      ctx.stroke();
+    }
     });
 
     // 绘制坐标轴标签 (简化)
@@ -1034,4 +1034,4 @@ Page({
     // 简单验证通过
     return true;
   },
-});
+}); 
