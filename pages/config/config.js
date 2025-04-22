@@ -234,6 +234,7 @@ Page({
 
   // 保存通用设置 (信号因子)
   saveSettingsAction() {
+    console.log('[config.js] saveSettingsAction called!');
     const factor = parseFloat(this.data.signalPathLossExponent);
     if (isNaN(factor) || factor <= 0) {
       wx.showToast({ title: '请输入有效的信号因子(正数)', icon: 'none' });
@@ -250,6 +251,14 @@ Page({
         // wx.setStorageSync('signalPathLossExponent', factor);
       });
   },
+
+  // --- NEW: Function to handle slider change ---
+  updateSignalFactor(e) {
+    if (e && e.detail) {
+      this.setData({ signalPathLossExponent: e.detail.value });
+    }
+  },
+  // --- END NEW ---
 
   // --- 标签页切换 ---
   switchTab(e) {
@@ -501,22 +510,41 @@ Page({
   handleDeviceFound(res) {
       if (!res.devices || res.devices.length === 0) return;
       res.devices.forEach(device => {
+          // --- REMOVE Raw Device Info Log ---
+          // console.log(`[handleDeviceFound] Detected Device: ID=${device.deviceId}, Name=${device.name}, LocalName=${device.localName}`);
           if (device.advertisData) {
+              // --- REMOVE Adv Data Log ---
+              // try {
+              //     const hexAdvData = Array.prototype.map.call(new Uint8Array(device.advertisData), x => ('00' + x.toString(16)).slice(-2)).join(' ');
+              //     console.log(`[handleDeviceFound] Adv Data: ${hexAdvData}`);
+              // } catch (e) {
+              //     console.warn('[handleDeviceFound] Error converting AdvData to hex', e);
+              // }
+          // --- END REMOVE Adv Data Log ---
+
               let beaconInfo = this.parseAdvertisDataStandard(device.advertisData);
               if (!beaconInfo) {
                   beaconInfo = this.parseAdvertisDataAlternative(device.advertisData);
               }
 
+              // --- REMOVE Parsing Result Log ---
               if (beaconInfo && beaconInfo.isIBeacon) {
+                  // console.log(`[handleDeviceFound] Parsed as iBeacon:`, JSON.stringify(beaconInfo));
                   this.addBeaconToScanResults({
                       ...beaconInfo,
                       rssi: device.RSSI,
                       deviceId: device.deviceId,
-                      // Pass along device names
                       name: device.name,
                       localName: device.localName
                   });
+              } else {
+                   // if (device.advertisData) {
+                   //    console.log(`[handleDeviceFound] Device ${device.deviceId || '(no ID)'} not parsed as iBeacon.`);
+                   // }
               }
+              // --- END REMOVE Parsing Result Log ---
+          } else {
+              // console.log(`[handleDeviceFound] Device ${device.deviceId || '(no ID)'} has no AdvData.`);
           }
       });
   },
@@ -541,7 +569,7 @@ Page({
                   return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
               }
           }
-      } catch (e) { console.error('标准解析错误', e); }
+      } catch (e) { /* console.error('标准解析错误', e); */ } // Keep error silent
       return null;
   },
 
@@ -564,26 +592,39 @@ Page({
                   return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
               }
           }
-      } catch (e) { console.error('备用解析错误', e); }
+      } catch (e) { /* console.error('备用解析错误', e); */ } // Keep error silent
       return null;
   },
 
   addBeaconToScanResults(beacon) {
-    if (!beacon || !beacon.uuid) { return; }
-
-    // --- Added Check: Filter out already configured beacons ---
-    const isAlreadyConfigured = this.data.beacons.some(configuredBeacon =>
-        configuredBeacon.uuid === beacon.uuid &&
-        configuredBeacon.major === beacon.major &&
-        configuredBeacon.minor === beacon.minor
-    );
-    if (isAlreadyConfigured) {
-        // console.log('Skipping already configured beacon:', beacon.uuid);
-        return; // Don't add to scan results if already configured
+    if (!beacon || !beacon.uuid) { 
+        console.warn('[addBeaconToScanResults] Invalid beacon data received:', beacon);
+        return; 
     }
-    // --- End Added Check ---
+
+    // console.log(`[addBeaconToScanResults] Processing Beacon: UUID=${beacon.uuid}, Major=${beacon.major}, Minor=${beacon.minor}, Name=${beacon.displayName}, DeviceID=${beacon.deviceId}`);
+
+    // --- MODIFIED Check: Filter out based on matching Device ID (MAC Address) only ---
+    let isAlreadyConfigured = false;
+    if (beacon.deviceId) { // Only filter if the scanned beacon has a deviceId
+        isAlreadyConfigured = this.data.beacons.some(configuredBeacon =>
+            configuredBeacon.deviceId && // Ensure the configured beacon also has a deviceId
+            configuredBeacon.deviceId === beacon.deviceId
+        );
+    } else {
+        // console.log(`[addBeaconToScanResults] Scanned beacon has no deviceId, cannot filter by MAC.`);
+    }
+    // --- END MODIFIED Check ---
+    
+    if (isAlreadyConfigured) {
+        // console.log(`[addBeaconToScanResults] Filtered: Device ID ${beacon.deviceId} already configured.`);
+        return; // Don't add to scan results if already configured by deviceId
+    } else {
+        // console.log(`[addBeaconToScanResults] Device ID ${beacon.deviceId || '(none)'} not configured, proceeding.`);
+    }
 
     const scanResults = [...this.data.scanResults];
+    // Check for duplicates within the *scan results list itself* based on UUID/Major/Minor
     const existingIndex = scanResults.findIndex(item =>
         item.uuid === beacon.uuid &&
         item.major === beacon.major &&
@@ -609,9 +650,11 @@ Page({
 
     if (existingIndex >= 0) {
       scanResults[existingIndex] = beaconInfo;
+      // console.log(`[addBeaconToScanResults] Updated existing entry in scan list (UUID/Major/Minor match).`);
     } else {
       scanResults.push(beaconInfo);
       scanResults.sort((a, b) => b.rssi - a.rssi);
+      // console.log(`[addBeaconToScanResults] Added new entry to scan list.`);
     }
     this.setData({ scanResults: scanResults });
   },

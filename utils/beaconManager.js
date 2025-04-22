@@ -23,6 +23,10 @@ const RSSI_FILTER_WINDOW_SIZE = 5; // Number of readings to average
 let rssiHistory = {}; // Stores recent RSSI values { 'uuid-major-minor': [rssi1, rssi2,...] }
 // --- END NEW ---
 
+// --- NEW: Add Storage Key Constant ---
+const SIGNAL_FACTOR_STORAGE_KEY = 'app_signal_factor';
+// --- END NEW ---
+
 // 内部状态
 let initialized = false;
 let isScanning = false;
@@ -57,6 +61,25 @@ function init(options = {}) {
       if (options.callbacks) {
         setCallbacks(options.callbacks);
       }
+
+      // --- NEW: Load signal factor from storage --- 
+      try {
+        const factorStr = wx.getStorageSync(SIGNAL_FACTOR_STORAGE_KEY);
+        if (factorStr) {
+            const storedFactor = parseFloat(factorStr);
+            if (!isNaN(storedFactor) && storedFactor > 0) {
+                signalFactor = storedFactor;
+                console.log(`[beaconManager] Loaded signal factor from storage: ${signalFactor}`);
+            } else {
+                 console.warn(`[beaconManager] Invalid signal factor found in storage ('${factorStr}'), using default: ${signalFactor}`);
+            }
+        } else {
+             console.log(`[beaconManager] No signal factor in storage, using default: ${signalFactor}`);
+        }
+      } catch(storageErr) {
+          console.error('[beaconManager] Error reading signal factor from storage:', storageErr);
+      }
+      // --- END NEW ---
       
       checkBluetoothState()
         .then(state => {
@@ -606,7 +629,7 @@ function processBuffer() {
     lastBufferProcessTime = now;
     
     const validBeacons = beaconBuffer.filter(beacon => {
-      return (now - beacon.timestamp) < 5000;
+      return (now - beacon.timestamp) < 3000;
     });
     
     beaconBuffer = validBeacons;

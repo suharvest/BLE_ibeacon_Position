@@ -107,7 +107,7 @@
       </view>
       
       <view class="settings-buttons">
-        <button class="btn btn-save" bindtap="saveSettings">保存设置</button>
+        <button class="btn btn-save" bindtap="saveSettingsAction">保存设置</button>
       </view>
       
       <view class="map-info-section">

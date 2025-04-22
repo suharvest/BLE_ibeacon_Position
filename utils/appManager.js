@@ -6,6 +6,7 @@
 const beaconManager = require('./beaconManager');
 const jsonMapRenderer = require('./jsonMapRenderer');
 const positionCalculator = require('./positionCalculator');
+const KalmanFilter = require('./kalmanFilter');
 
 // 全局状态
 let state = {
@@ -46,6 +47,24 @@ let callbacks = {
   onMapLoaded: null,
   onBeaconsConfigured: null
 };
+
+// --- NEW: Kalman Filter Instances & Config ---
+// Tunable Parameters (adjust these based on testing)
+const KALMAN_R = 0.01; // Process noise (how much we expect position to change randomly) - Start low for smoother output
+const KALMAN_Q = 4;   // Measurement noise (how noisy the calculated position is) - Start high because RSSI is noisy
+const INITIAL_COVARIANCE = 1;
+
+let kalmanFilterX = null;
+let kalmanFilterY = null;
+let kalmanInitialized = false;
+// --- END NEW ---
+
+// --- NEW: Calibration State ---
+let isCalibrating = false;
+let calibrationData = {}; // { "uuid-major-minor": [{ distance, rssi, timestamp }, ...] }
+let calibrationTimer = null;
+const CALIBRATION_DURATION_MS = 3000; // 3 seconds for calibration
+// --- END NEW ---
 
 /**
  * 初始化应用程序管理器
@@ -121,11 +140,10 @@ function loadStoredData() {
     loadMapFromStorage(),
     loadBeaconsFromStorage(),
     loadSettingsFromStorage(),
-    loadSignalFactorFromStorage()
   ])
   .then(results => {
     console.log('存储数据加载完成:', 
-      `Map=${results[0].status}, Beacons=${results[1].status}, Settings=${results[2].status}, SignalFactor=${results[3].status}`
+      `Map=${results[0].status}, Beacons=${results[1].status}, Settings=${results[2].status}`
     );
     results.forEach(result => {
       if (result.status === 'rejected') {
@@ -214,6 +232,9 @@ function loadBeaconsFromStorage() {
         state.configuredBeaconCount = 0;
         beaconManager.setConfiguredBeacons([]);
         updateState(); // 确保状态更新
+        if (typeof callbacks.onBeaconsConfigured === 'function') {
+            callbacks.onBeaconsConfigured([]); // Notify listeners even if empty
+        }
         resolve(false);
         return;
       }
@@ -228,7 +249,10 @@ function loadBeaconsFromStorage() {
         state.errorMessage = '信标数据格式无效';
         beaconManager.setConfiguredBeacons([]);
         updateState(); // 确保状态更新
-        resolve(false);
+         if (typeof callbacks.onBeaconsConfigured === 'function') {
+            callbacks.onBeaconsConfigured([]); // Notify listeners even if empty
+        }
+        resolve(false); // Resolve false on parse error, as no valid beacons loaded
         return;
       }
       
@@ -237,27 +261,27 @@ function loadBeaconsFromStorage() {
         state.configuredBeaconCount = 0;
         beaconManager.setConfiguredBeacons([]);
         updateState(); // 确保状态更新
-        resolve(false);
+         if (typeof callbacks.onBeaconsConfigured === 'function') {
+            callbacks.onBeaconsConfigured([]); // Notify listeners even if empty
+        }
+        resolve(false); // Resolve false on invalid data type
         return;
       }
       
-      // 确保每个信标有有效的位置和UUID
-      const validBeacons = beacons.filter(beacon => 
-        beacon && 
-        beacon.uuid && 
-        typeof beacon.x === 'number' && 
-        typeof beacon.y === 'number' &&
-        typeof beacon.txPower === 'number'
+      // 验证每个信标数据的基本结构 (可选，但推荐)
+      const validBeacons = beacons.filter(b => 
+        b && typeof b.uuid === 'string' && typeof b.x === 'number' && typeof b.y === 'number'
       );
       
-      // 更新信标配置
-      beaconManager.setConfiguredBeacons(validBeacons);
+      if (validBeacons.length !== beacons.length) {
+          console.warn('部分存储的信标数据无效，已过滤。');
+      }
+
       state.configuredBeaconCount = validBeacons.length;
-      updateState(); // 确保状态更新
+      beaconManager.setConfiguredBeacons(validBeacons);
+      state.errorMessage = null;
+      updateState();
       
-      console.log('从存储加载信标配置成功，数量:', validBeacons.length);
-      
-      // 通知信标配置完成
       if (typeof callbacks.onBeaconsConfigured === 'function') {
         callbacks.onBeaconsConfigured(validBeacons);
       }
@@ -266,46 +290,13 @@ function loadBeaconsFromStorage() {
     } catch (err) {
       console.error('从存储加载信标配置失败:', err);
       state.configuredBeaconCount = 0;
-      state.errorMessage = '加载信标配置失败: ' + (err.message || String(err));
+      state.errorMessage = '加载信标失败: ' + (err.message || String(err));
       beaconManager.setConfiguredBeacons([]);
       updateState(); // 确保状态更新
-      resolve(false);
-    }
-  });
-}
-
-/**
- * 从存储加载信号因子
- * @returns {Promise} 加载结果
- */
-function loadSignalFactorFromStorage() {
-  return new Promise((resolve) => {
-    try {
-      // 从存储获取信号因子
-      const factorStr = wx.getStorageSync(STORAGE_KEYS.SIGNAL_FACTOR);
-      
-      if (!factorStr) {
-        console.log('存储中无信号因子数据，使用默认值');
-        resolve(false);
-        return;
+      if (typeof callbacks.onBeaconsConfigured === 'function') {
+        callbacks.onBeaconsConfigured([]); // Notify listeners on error
       }
-      
-      // 解析信号因子
-      const factor = parseFloat(factorStr);
-      if (isNaN(factor) || factor <= 0) {
-        console.warn('存储的信号因子无效，使用默认值');
-        resolve(false);
-        return;
-      }
-      
-      // 设置信号因子
-      beaconManager.setSignalFactor(factor);
-      
-      console.log('从存储加载信号因子成功:', factor);
-      resolve(true);
-    } catch (err) {
-      console.error('从存储加载信号因子失败:', err);
-      resolve(false);
+      resolve(false); // Resolve false on general error
     }
   });
 }
@@ -432,46 +423,38 @@ function saveMapToStorage(mapInfo) {
 
 /**
  * 保存信标配置到存储
- * @param {Array} beacons 信标数组
+ * @param {Array} beacons 信标列表
  * @returns {Promise} 保存结果
  */
 function saveBeaconsToStorage(beacons) {
   return new Promise((resolve, reject) => {
+    if (!Array.isArray(beacons)) {
+      return reject(new Error('无效的信标数据格式'));
+    }
     try {
-      if (!Array.isArray(beacons)) {
-        console.error('保存信标失败：无效的信标数据');
-        reject(new Error('无效的信标数据'));
-        return;
-      }
-      
-      // 将信标信息转换为字符串
-      const beaconsStr = JSON.stringify(beacons);
-      
-      // 保存到存储
       wx.setStorage({
         key: STORAGE_KEYS.BEACONS,
-        data: beaconsStr,
+        data: JSON.stringify(beacons),
         success() {
-          console.log('信标信息保存成功，数量:', beacons.length);
-          
-          // 更新信标管理器
-          beaconManager.setConfiguredBeacons(beacons);
-          state.configuredBeaconCount = beacons.length;
+          console.log('信标配置已保存');
+          state.configuredBeaconCount = beacons.length; // Update count after successful save
           updateState();
-          
-          // 通知信标配置完成
           if (typeof callbacks.onBeaconsConfigured === 'function') {
-            callbacks.onBeaconsConfigured(beacons);
+            callbacks.onBeaconsConfigured(beacons); // Notify after save
           }
-          
           resolve(true);
         },
         fail(err) {
-          console.error('保存信标信息失败:', err);
+          console.error('保存信标配置失败:', err);
+          state.errorMessage = '保存信标失败';
+          updateState();
           reject(err);
         }
       });
     } catch (err) {
+      console.error('保存信标配置时发生异常:', err);
+      state.errorMessage = '保存信标异常';
+      updateState();
       console.error('保存信标信息出错:', err);
       reject(err);
     }
@@ -587,35 +570,62 @@ function updateSettings(newSettings) {
  */
 function startLocating() {
   if (state.locating) {
-    console.log('已经在定位中，忽略重复调用');
+    console.log('Already locating, ignoring duplicate call');
     return Promise.resolve(true);
   }
   
-  console.log('开始信标定位...');
+  console.log('Starting beacon location...');
   
-  // 检查配置的信标
   if (state.configuredBeaconCount === 0) {
-    const error = new Error('没有配置的信标，无法开始定位');
+    const error = new Error('No beacons configured, cannot start locating');
     handleError(error);
     return Promise.reject(error);
   }
   
-  // 重置定位状态
+  // Reset positioning state
   state.lastPosition = null;
   state.positionTimestamp = 0;
   state.positionCount = 0;
   state.detectedBeacons = [];
   state.errorMessage = null;
-  state.locating = true;
+
+  // Reset Kalman Filters
+  kalmanFilterX = null;
+  kalmanFilterY = null;
+  kalmanInitialized = false;
+  console.log('Kalman filters reset.');
+
+  // --- NEW: Start Calibration Phase --- 
+  isCalibrating = true;
+  calibrationData = {};
+  if (calibrationTimer) clearTimeout(calibrationTimer);
+  calibrationTimer = setTimeout(finishCalibration, CALIBRATION_DURATION_MS);
+  console.log(`Starting calibration phase for ${CALIBRATION_DURATION_MS}ms...`);
+  // --- END NEW ---
   
+  state.locating = true; 
   updateState();
   
-  // 开始扫描信标
   return beaconManager.startScan()
+    .then(() => {
+        console.log('Beacon scanning started successfully.');
+        return true;
+    })
     .catch(err => {
+      console.error('Failed to start scanning:', err);
       state.locating = false;
       state.errorMessage = '启动扫描失败: ' + (err.message || err);
       updateState();
+      // Ensure Kalman state is also reset on failure
+      kalmanFilterX = null; 
+      kalmanFilterY = null;
+      kalmanInitialized = false;
+      // --- NEW: Clear calibration state on failure --- 
+      isCalibrating = false;
+      if (calibrationTimer) clearTimeout(calibrationTimer);
+      calibrationTimer = null;
+      calibrationData = {};
+      // --- END NEW ---
       return Promise.reject(err);
     });
 }
@@ -629,59 +639,117 @@ function stopLocating() {
     return Promise.resolve(true);
   }
   
-  console.log('停止信标定位');
+  console.log('Stopping beacon location');
   state.locating = false;
+
+  // Clear Kalman state on stop
+  kalmanFilterX = null;
+  kalmanFilterY = null;
+  kalmanInitialized = false;
+  console.log('Kalman filters cleared on stop.');
+
+  // --- NEW: Clear calibration state on stop --- 
+  isCalibrating = false;
+  if (calibrationTimer) clearTimeout(calibrationTimer);
+  calibrationTimer = null;
+  calibrationData = {};
+  // --- END NEW ---
+
   updateState();
   
-  // 停止扫描
   return beaconManager.stopScan();
 }
 
 /**
  * 处理检测到的信标
- * @param {Array} beacons 检测到的信标
+ * @param {Array} beacons 检测到的信标 (with filtered RSSI and calculated distance)
  */
 function handleBeaconsDetected(beacons) {
   if (!Array.isArray(beacons) || beacons.length === 0) {
     return;
   }
   
-  // 更新检测到的信标
+  // --- NEW: Handle Calibration Phase --- 
+  if (isCalibrating) {
+    const now = Date.now();
+    beacons.forEach(b => {
+      const key = `${b.uuid}-${b.major}-${b.minor}`;
+      if (!calibrationData[key]) {
+        calibrationData[key] = [];
+      }
+      calibrationData[key].push({ 
+        distance: b.distance, 
+        rssi: b.rssi, 
+        timestamp: now,
+        // Store original beacon config for position calculation
+        x: b.x,
+        y: b.y,
+        uuid: b.uuid,
+        major: b.major,
+        minor: b.minor,
+        txPower: b.txPower // Assuming txPower is passed from beaconManager
+      });
+    });
+    // Don't calculate position during calibration
+    // console.log('Calibration phase: Data received for', Object.keys(calibrationData).length, 'beacons');
+    state.detectedBeacons = beacons; // Still update detected beacons for UI feedback
+    updateState();
+    return; 
+  }
+  // --- END NEW ---
+  
+  // --- Existing Logic (runs after calibration) ---
   state.detectedBeacons = beacons;
   
-  // 至少需要3个信标才能定位
-  if (beacons.length < 3) {
-    return;
-  }
-  
-  // 根据设置选择定位方法
   const method = settings.positioningMethod;
   
-  // 计算位置
   try {
-    const position = positionCalculator.calculatePosition(beacons, method);
+    // 1. Calculate Raw Position
+    const rawPosition = positionCalculator.calculatePosition(beacons, method);
     
-    if (position && typeof position.x === 'number' && typeof position.y === 'number') {
-      // 更新位置信息
-      state.lastPosition = position;
+    if (rawPosition && typeof rawPosition.x === 'number' && typeof rawPosition.y === 'number') {
+      let filteredX, filteredY;
+
+      // 2. Apply Kalman Filter
+      if (kalmanInitialized) {
+          filteredX = kalmanFilterX.update(rawPosition.x);
+          filteredY = kalmanFilterY.update(rawPosition.y);
+      } else {
+          // Initialize filters with the first valid raw position
+          kalmanFilterX = new KalmanFilter({ R: KALMAN_R, Q: KALMAN_Q, initialEstimate: rawPosition.x, initialCovariance: INITIAL_COVARIANCE });
+          kalmanFilterY = new KalmanFilter({ R: KALMAN_R, Q: KALMAN_Q, initialEstimate: rawPosition.y, initialCovariance: INITIAL_COVARIANCE });
+          filteredX = rawPosition.x; // Use raw position for the first time
+          filteredY = rawPosition.y;
+          kalmanInitialized = true;
+          console.log(`Kalman filters initialized at (${filteredX.toFixed(2)}, ${filteredY.toFixed(2)})`);
+      }
+
+      // 3. Update State with Filtered Position
+      const filteredPosition = { x: filteredX, y: filteredY };
+      state.lastPosition = filteredPosition;
       state.positionTimestamp = Date.now();
       state.positionCount++;
       state.errorMessage = null;
       
-      if (state.positionCount === 1) {
-         console.log(`位置更新(${method}): (${position.x.toFixed(2)}, ${position.y.toFixed(2)})`);
+      if (state.positionCount % 10 === 1) { // Log every 10 updates
+         console.log(`Position Update #${state.positionCount} (${method}) - Raw: (${rawPosition.x.toFixed(2)}, ${rawPosition.y.toFixed(2)}), Filtered: (${filteredPosition.x.toFixed(2)}, ${filteredPosition.y.toFixed(2)})`);
       }
       
-      // 通知位置更新
+      // Notify UI
       if (typeof callbacks.onPositionUpdate === 'function') {
-        callbacks.onPositionUpdate(position, beacons);
+        callbacks.onPositionUpdate(filteredPosition, beacons);
       }
     } else {
-      console.warn('位置计算结果无效');
+      // Handle cases where position calculation fails
+      // state.lastPosition = null; // Optionally clear position on calculation failure
+      // state.errorMessage = '位置计算失败';
+      console.warn('Position calculation returned invalid result.');
     }
   } catch (err) {
-    console.error('计算位置出错:', err);
-    state.errorMessage = '位置计算错误: ' + (err.message || err);
+    console.error('Error calculating/filtering position:', err);
+    state.errorMessage = '位置处理错误: ' + (err.message || err);
+    // Optionally reset Kalman filters on error?
+    // kalmanFilterX = null; kalmanFilterY = null; kalmanInitialized = false;
   }
   
   updateState();
@@ -1026,6 +1094,93 @@ function clearTrajectoryData() {
     handleError(new Error('清除轨迹失败')); // Notify user via error handler
   }
 }
+
+// --- NEW: Function to finalize calibration --- 
+function finishCalibration() {
+  console.log('Finishing calibration phase...');
+  isCalibrating = false;
+  calibrationTimer = null;
+
+  if (Object.keys(calibrationData).length === 0) {
+    console.warn('Calibration finished with no beacon data.');
+    calibrationData = {}; // Clear just in case
+    // Proceed without initializing Kalman - it will init on first valid position later
+    return;
+  }
+
+  // 1. Process Calibration Data: Calculate average distance per beacon
+  const calibratedBeacons = [];
+  for (const key in calibrationData) {
+    const readings = calibrationData[key];
+    if (readings.length > 0) {
+      const sumDistance = readings.reduce((acc, r) => acc + r.distance, 0);
+      const avgDistance = sumDistance / readings.length;
+      
+      // Use the details from the first reading (they should be consistent for the same beacon)
+      const beaconConfig = readings[0]; 
+      
+      calibratedBeacons.push({
+        uuid: beaconConfig.uuid,
+        major: beaconConfig.major,
+        minor: beaconConfig.minor,
+        x: beaconConfig.x,
+        y: beaconConfig.y,
+        txPower: beaconConfig.txPower,
+        distance: avgDistance, // Use averaged distance
+        readingCount: readings.length // Store reading count for potential sorting/filtering
+      });
+    }
+  }
+
+  // 2. Check if enough beacons for trilateration
+  if (calibratedBeacons.length < 3) {
+    console.warn(`Calibration finished with only ${calibratedBeacons.length} beacons. Cannot calculate initial position. Kalman filter will initialize later.`);
+    calibrationData = {}; // Clear data
+    return; 
+  }
+
+  // 3. Select best beacons (optional, could use all available if >= 3)
+  // For now, use all calibrated beacons if >= 3
+  const beaconsForInitialPosition = calibratedBeacons.sort((a, b) => b.readingCount - a.readingCount); // Prioritize beacons with more readings
+
+  // 4. Calculate Initial Position
+  try {
+    const initialRawPosition = positionCalculator.calculatePosition(beaconsForInitialPosition, settings.positioningMethod);
+
+    if (initialRawPosition && typeof initialRawPosition.x === 'number' && typeof initialRawPosition.y === 'number') {
+      // 5. Initialize Kalman Filter
+      kalmanFilterX = new KalmanFilter({ R: KALMAN_R, Q: KALMAN_Q, initialEstimate: initialRawPosition.x, initialCovariance: INITIAL_COVARIANCE });
+      kalmanFilterY = new KalmanFilter({ R: KALMAN_R, Q: KALMAN_Q, initialEstimate: initialRawPosition.y, initialCovariance: INITIAL_COVARIANCE });
+      kalmanInitialized = true;
+
+      // Update state with the initial position
+      state.lastPosition = { x: initialRawPosition.x, y: initialRawPosition.y }; // Use raw as first filtered
+      state.positionTimestamp = Date.now();
+      state.positionCount = 1; // Mark as first position
+      state.errorMessage = null;
+      
+      console.log(`Calibration successful! Kalman filters initialized at (${initialRawPosition.x.toFixed(2)}, ${initialRawPosition.y.toFixed(2)}) using ${beaconsForInitialPosition.length} beacons.`);
+
+      // Notify UI about the initial position
+      if (typeof callbacks.onPositionUpdate === 'function') {
+          // Pass the *original* detected beacons from the last update before calibration finished?
+          // Or pass the averaged `calibratedBeacons`? Passing last detected seems more consistent.
+        callbacks.onPositionUpdate(state.lastPosition, state.detectedBeacons);
+      }
+      updateState(); // Ensure state update is pushed
+
+    } else {
+      console.warn('Calibration finished, but failed to calculate a valid initial position from averaged data. Kalman filter will initialize later.');
+    }
+  } catch (err) {
+    console.error('Error calculating initial position during calibration finalization:', err);
+    // Proceed without initializing Kalman
+  }
+  
+  // 6. Clear calibration data store
+  calibrationData = {};
+}
+// --- END NEW ---
 
 module.exports = {
   // 初始化和状态管理

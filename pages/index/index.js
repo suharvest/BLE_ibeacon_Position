@@ -468,11 +468,6 @@ Page({
 
   // **** NEW: Clear Trajectory History ****
   clearTrajectoryHistory() {
-    if (!this.data.isLocating) {
-        // Optionally show a message if trying to clear when not locating
-        // wx.showToast({ title: '定位未开始', icon: 'none' });
-        return; 
-    }
     try {
         if (appManager && typeof appManager.clearTrajectoryData === 'function') {
             appManager.clearTrajectoryData();
