@@ -215,6 +215,21 @@
   margin-bottom: 4px;
 }
 
+/* **** NEW: Style for read-only form values **** */
+.form-value {
+  font-size: 14px;
+  color: #555; /* Slightly darker than placeholder */
+  padding: 8px 12px;
+  background-color: #f9f9f9; /* Indicate non-editable */
+  border: 1px solid #eee;
+  border-radius: 4px;
+  display: block; /* Ensure it takes full width */
+  min-height: 1.4em; /* Match input height roughly */
+  line-height: 1.4em;
+  word-break: break-all; /* Allow long MACs to wrap */
+}
+/* **** END NEW **** */
+
 .form-row {
   display: flex;
 }

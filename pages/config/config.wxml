@@ -27,7 +27,7 @@
         <text class="empty-tip">点击下方的"添加Beacon"按钮添加</text>
       </view>
       
-      <view class="beacon-item" wx:for="{{beacons}}" wx:key="id" bindtap="editBeacon" data-index="{{index}}">
+      <view class="beacon-item" wx:for="{{beacons}}" wx:key="uuid" bindtap="showEditBeaconModal" data-index="{{index}}">
         <view class="beacon-info">
           <view class="beacon-name">
             <text class="beacon-index">{{index + 1}}.</text>
@@ -85,8 +85,8 @@
       </view>
       
       <view class="map-buttons">
-        <button class="btn {{coordSelectMode ? 'btn-disabled' : ''}}" bindtap="{{coordSelectMode ? '' : 'uploadMap'}}">{{mapInfo.jsonContent ? '更换地图' : '上传地图'}}</button>
-        <button class="btn btn-save {{coordSelectMode ? 'btn-disabled' : ''}}" bindtap="{{coordSelectMode ? '' : 'saveMapConfig'}}">保存配置</button>
+        <button class="btn {{mapInfo.jsonContent ? '' : 'btn-primary'}}" bindtap="uploadMap" disabled="{{coordSelectMode}}">{{mapInfo.jsonContent ? '更换地图' : '上传地图'}}</button>
+        <button class="btn btn-save" bindtap="saveMapConfigAction" disabled="{{coordSelectMode || !mapInfo.jsonContent}}">保存配置</button>
       </view>
     </view>
   </view>
@@ -149,36 +149,40 @@
       <text>{{beaconModalMode === 'add' ? '添加Beacon' : '编辑Beacon'}}</text>
     </view>
     <view class="modal-body">
-      <view class="form-group">
-        <view class="form-label">设备标识</view>
-        <input class="form-input" value="{{editingBeacon.displayName}}" bindinput="updateBeaconField" data-field="displayName" placeholder="设备名称或MAC地址"/>
+      <view class="form-group" wx:if="{{editingBeacon.deviceId}}">
+        <view class="form-label">MAC地址 (设备ID)</view>
+        <text class="form-value">{{editingBeacon.deviceId}}</text>
       </view>
       <view class="form-group">
-        <view class="form-label">UUID</view>
+        <view class="form-label">设备名称</view>
+        <input class="form-input" value="{{editingBeacon.displayName}}" bindinput="updateBeaconField" data-field="displayName" placeholder="(可选) 自定义名称"/>
+      </view>
+      <view class="form-group">
+        <view class="form-label">UUID (*)</view>
         <input class="form-input" value="{{editingBeacon.uuid}}" bindinput="updateBeaconField" data-field="uuid" placeholder="Beacon UUID"/>
       </view>
       <view class="form-group">
         <view class="form-label">Major</view>
-        <input class="form-input" type="number" value="{{editingBeacon.major}}" bindinput="updateBeaconField" data-field="major" placeholder="Beacon Major"/>
+        <input class="form-input" type="number" value="{{editingBeacon.major}}" bindinput="updateBeaconField" data-field="major" placeholder="(可选) Beacon Major"/>
       </view>
       <view class="form-group">
         <view class="form-label">Minor</view>
-        <input class="form-input" type="number" value="{{editingBeacon.minor}}" bindinput="updateBeaconField" data-field="minor" placeholder="Beacon Minor"/>
+        <input class="form-input" type="number" value="{{editingBeacon.minor}}" bindinput="updateBeaconField" data-field="minor" placeholder="(可选) Beacon Minor"/>
       </view>
       <view class="form-group">
-        <view class="form-label">位置 X (米)</view>
+        <view class="form-label">位置 X (米) (*)</view>
         <view class="form-row">
           <input class="form-input with-button" type="digit" value="{{editingBeacon.x}}" bindinput="updateBeaconField" data-field="x" placeholder="X坐标 (米)"/>
           <button class="map-select-btn" bindtap="selectCoordinateFromMap">从地图选择</button>
         </view>
       </view>
       <view class="form-group">
-        <view class="form-label">位置 Y (米)</view>
+        <view class="form-label">位置 Y (米) (*)</view>
         <input class="form-input" type="digit" value="{{editingBeacon.y}}" bindinput="updateBeaconField" data-field="y" placeholder="Y坐标 (米)"/>
       </view>
       <view class="form-group">
-        <view class="form-label">信号功率 (dBm)</view>
-        <input class="form-input" type="digit" value="{{editingBeacon.txPower}}" bindinput="updateBeaconField" data-field="txPower" placeholder="1米处的信号强度"/>
+        <view class="form-label">信号功率 (dBm @ 1m) (*)</view>
+        <input class="form-input" type="digit" value="{{editingBeacon.txPower}}" bindinput="updateBeaconField" data-field="txPower" placeholder="1米处的信号强度, 如 -59"/>
       </view>
     </view>
     <view class="modal-footer">

@@ -110,12 +110,41 @@ page {
   box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.05);
 }
 
+/* NEW: Added row for buttons */
+.control-row {
+    display: flex;
+    width: 90%; /* Adjust width as needed */
+    justify-content: space-between; /* Space out buttons */
+    align-items: center;
+    margin-bottom: 10px;
+}
+
 .locate-btn {
-  width: 80% !important;
+  /* Adjust width to fit in the row */
+  flex-basis: 65%; /* Example width */
   font-size: 16px;
   border-radius: 25px;
-  margin-bottom: 10px;
+  /* Remove margin-bottom if now in a row */
+  /* margin-bottom: 10px; */ 
 }
+
+/* **** NEW: Style for Clear Trajectory Button **** */
+.clear-btn {
+    flex-basis: 30%; /* Example width */
+    font-size: 14px;
+    border-radius: 20px;
+    background-color: #ff9800; /* Example color */
+    color: white;
+    padding: 8px 0; /* Adjust padding */
+    height: auto; /* Adjust height if needed */
+    line-height: normal;
+}
+
+.clear-btn[disabled] {
+    background-color: #cccccc !important;
+    color: #888888 !important;
+}
+/* **** END NEW **** */
 
 .start {
   background-color: #4CAF50;

@@ -1,345 +1,719 @@
-// beaconManager.js
-const app = getApp();
-// RSSI的历史记录，用于滑动平均滤波
-const rssiHistory = new Map();
-// 滑动平均窗口大小
-const SLIDING_WINDOW_SIZE = 5;
+/**
+ * 蓝牙信标管理器
+ * 负责扫描和处理蓝牙信标数据
+ */
+
+// 蓝牙状态常量
+const BLUETOOTH_STATE = {
+  CLOSED: 'closed',          // 蓝牙关闭
+  UNAUTHORIZED: 'unauthorized', // 未授权
+  UNSUPPORTED: 'unsupported',   // 设备不支持
+  AVAILABLE: 'available'      // 可用
+};
+
+// 距离校准常量（1米处测得的信号强度）
+// 这是一个默认值，实际应根据不同设备校准
+const DISTANCE_CALIBRATION = -70;
+
+// 信号衰减因子（信号传播环境特性，默认值为2.5）
+let signalFactor = 2.5;
+
+// --- NEW: RSSI Filter Settings ---
+const RSSI_FILTER_WINDOW_SIZE = 5; // Number of readings to average
+let rssiHistory = {}; // Stores recent RSSI values { 'uuid-major-minor': [rssi1, rssi2,...] }
+// --- END NEW ---
+
+// 内部状态
+let initialized = false;
+let isScanning = false;
+let bluetoothState = BLUETOOTH_STATE.CLOSED;
+let configuredBeacons = [];
+let beaconBuffer = [];
+let lastBufferProcessTime = 0;
+let processTimer = null;
+
+// 回调函数
+let callbacks = {
+  onBeaconsDetected: null,
+  onBluetoothStateChanged: null,
+  onError: null
+};
 
 /**
- * 开始搜索附近的iBeacon设备
- * @param {Array} uuids 要搜索的UUID列表
- * @param {Function} callback 搜索结果回调
- * @return {Promise}
+ * 初始化信标管理器
+ * @param {Object} options 初始化选项
+ * @returns {Promise} 初始化结果
  */
-function startBeaconDiscovery(uuids, callback) {
+function init(options = {}) {
   return new Promise((resolve, reject) => {
-    // 先初始化蓝牙适配器
-    wx.openBluetoothAdapter({
-      success: () => {
-        console.log('蓝牙适配器初始化成功');
-        
-        // 开始扫描iBeacon
-        wx.startBeaconDiscovery({
-          uuids: uuids,
-          success: () => {
-            console.log('开始搜索iBeacon设备', uuids);
-            
-            // 监听iBeacon设备变化
-            wx.onBeaconUpdate((res) => {
-              console.log('检测到iBeacon更新:', res.beacons.length);
-              if (typeof callback === 'function') {
-                callback(res.beacons);
-              }
-            });
-            resolve();
-          },
-          fail: (err) => {
-            console.error('搜索iBeacon设备失败', err);
-            reject(err);
-          }
-        });
-      },
-      fail: (err) => {
-        console.error('蓝牙适配器初始化失败', err);
-        reject(err);
+    try {
+      if (initialized) {
+        resolve(true);
+        return;
       }
-    });
+      console.log('初始化信标管理器...');
+      
+      // 设置回调函数
+      if (options.callbacks) {
+        setCallbacks(options.callbacks);
+      }
+      
+      checkBluetoothState()
+        .then(state => {
+          bluetoothState = state;
+          console.log('蓝牙状态:', state);
+          initialized = true;
+          resolve(true);
+        })
+        .catch(err => {
+          console.error('检查蓝牙状态失败:', err);
+          bluetoothState = BLUETOOTH_STATE.UNSUPPORTED;
+          initialized = true;
+          if (callbacks.onBluetoothStateChanged) {
+            callbacks.onBluetoothStateChanged(bluetoothState);
+          }
+          resolve(false);
+        });
+    } catch (error) {
+      console.error('初始化信标管理器出错:', error);
+      reject(error);
+    }
   });
 }
 
 /**
- * 停止搜索iBeacon设备
+ * 设置回调函数
+ * @param {Object} newCallbacks 回调函数集合
  */
-function stopBeaconDiscovery() {
+function setCallbacks(newCallbacks) {
+  if (typeof newCallbacks !== 'object') return;
+  
+  // 更新回调
+  for (const key in newCallbacks) {
+    if (typeof newCallbacks[key] === 'function' && callbacks.hasOwnProperty(key)) {
+      callbacks[key] = newCallbacks[key];
+    }
+  }
+}
+
+/**
+ * 检查蓝牙状态
+ * @returns {Promise<string>} 蓝牙状态
+ */
+function checkBluetoothState() {
   return new Promise((resolve, reject) => {
-    wx.stopBeaconDiscovery({
-      success: () => {
-        console.log('停止搜索iBeacon设备');
-        wx.offBeaconUpdate(); // 移除监听器
-        resolve();
+    wx.onBluetoothAdapterStateChange((res) => {
+      const newRawState = res.available;
+      let newState = newRawState ? BLUETOOTH_STATE.AVAILABLE : BLUETOOTH_STATE.CLOSED;
+
+      if (newState !== bluetoothState) {
+        console.log(`[beaconManager] 蓝牙状态改变: ${bluetoothState} -> ${newState}`);
+        bluetoothState = newState;
+        if (callbacks.onBluetoothStateChanged) {
+          try {
+            callbacks.onBluetoothStateChanged(bluetoothState);
+          } catch (callbackErr) {
+             console.error('[beaconManager] Error executing onBluetoothStateChanged callback:', callbackErr);
+          }
+        }
+      }
+    });
+    
+    wx.openBluetoothAdapter({
+      success: (res) => {
+        bluetoothState = BLUETOOTH_STATE.AVAILABLE;
+        if (callbacks.onBluetoothStateChanged) {
+          callbacks.onBluetoothStateChanged(bluetoothState);
+        }
+        resolve(bluetoothState);
       },
       fail: (err) => {
-        console.error('停止搜索iBeacon设备失败', err);
+        console.error('[beaconManager] openBluetoothAdapter failed:', err);
+        let errorState = BLUETOOTH_STATE.CLOSED;
+        if (err.errCode === 10001) {
+          console.error('[beaconManager] Error: Bluetooth not enabled on device.');
+          errorState = BLUETOOTH_STATE.CLOSED; // Or a specific state like UNAVAILABLE?
+        } else if (err.errCode === 10009 || err.errMsg.includes('auth')) {
+          console.error('[beaconManager] Error: Bluetooth permission denied.');
+          errorState = BLUETOOTH_STATE.UNAUTHORIZED;
+        } else {
+          console.error('[beaconManager] Error: Bluetooth adapter unavailable or unsupported.');
+          errorState = BLUETOOTH_STATE.UNSUPPORTED;
+        }
+        bluetoothState = errorState;
+        if (callbacks.onBluetoothStateChanged) {
+          callbacks.onBluetoothStateChanged(bluetoothState);
+        }
         reject(err);
       },
       complete: () => {
-        // 关闭蓝牙适配器
-        wx.closeBluetoothAdapter();
       }
     });
   });
 }
 
 /**
- * RSSI滑动平均滤波
- * @param {String} beaconId 标识beacon的唯一ID (uuid-major-minor)
- * @param {Number} rssi 当前的RSSI值
- * @return {Number} 滤波后的RSSI值
+ * 设置已配置的信标列表
+ * @param {Array} beacons 信标数组
+ * @returns {Boolean} 设置是否成功
  */
-function applyRssiFilter(beaconId, rssi) {
-  if (!rssiHistory.has(beaconId)) {
-    rssiHistory.set(beaconId, []);
+function setConfiguredBeacons(beacons) {
+  if (!Array.isArray(beacons)) {
+    console.error('设置信标列表失败：参数必须是数组');
+    return false;
   }
   
-  const history = rssiHistory.get(beaconId);
-  history.push(rssi);
-  
-  // 保持窗口大小
-  if (history.length > SLIDING_WINDOW_SIZE) {
-    history.shift();
-  }
-  
-  // 计算平均值
-  const sum = history.reduce((acc, val) => acc + val, 0);
-  return sum / history.length;
-}
-
-/**
- * 根据RSSI计算距离（米）
- * @param {Number} rssi 接收到的信号强度
- * @param {Number} txPower 1米处的参考信号强度
- * @param {Number} n 信号传播因子
- * @return {Number} 估算距离（米）
- */
-function calculateDistance(rssi, txPower, n) {
-  // 避免计算错误
-  if (!rssi || !txPower || !n) {
-    return -1;
-  }
-  
-  // 应用公式：d = 10 ^ ((txPower - rssi) / (10 * n))
-  return Math.pow(10, (txPower - rssi) / (10 * n));
-}
-
-/**
- * 三边测量计算位置
- * @param {Array} beaconDistances 至少3个beacon的距离数组 [{id, x, y, distance}, ...]
- * @return {Object|null} 计算得到的位置 {x, y} 或失败时返回null
- */
-function calculatePosition(beaconDistances) {
-  // 需要至少3个有效的beacon测距
-  if (!beaconDistances || beaconDistances.length < 3) {
-    return null;
-  }
-  
-  // 这里使用最小二乘法求解超定方程组
-  try {
-    // 准备最小二乘法求解的矩阵
-    const n = beaconDistances.length;
-    
-    // 创建系数矩阵A和常数向量b
-    // 参考：https://en.wikipedia.org/wiki/True_range_multilateration
-    
-    // 选择第一个beacon作为参考点
-    const refBeacon = beaconDistances[0];
-    
-    // 构造系数矩阵A和常数向量b
-    const matrixA = [];
-    const vectorB = [];
-    
-    for (let i = 1; i < n; i++) {
-      const beacon = beaconDistances[i];
-      
-      // 构造方程：
-      // (x - x_i)^2 + (y - y_i)^2 = d_i^2
-      // 减去参考方程 (x - x_0)^2 + (y - y_0)^2 = d_0^2 后
-      // 得到 2(x_0 - x_i)x + 2(y_0 - y_i)y = d_0^2 - d_i^2 - x_0^2 + x_i^2 - y_0^2 + y_i^2
-      
-      // 系数部分：2(x_0 - x_i)x + 2(y_0 - y_i)y
-      matrixA.push([
-        2 * (refBeacon.x - beacon.x),
-        2 * (refBeacon.y - beacon.y)
-      ]);
-      
-      // 常数部分：d_0^2 - d_i^2 - x_0^2 + x_i^2 - y_0^2 + y_i^2
-      vectorB.push(
-        Math.pow(refBeacon.distance, 2) - 
-        Math.pow(beacon.distance, 2) - 
-        Math.pow(refBeacon.x, 2) + 
-        Math.pow(beacon.x, 2) - 
-        Math.pow(refBeacon.y, 2) + 
-        Math.pow(beacon.y, 2)
-      );
+  // 过滤并验证信标数据
+  configuredBeacons = beacons.filter(beacon => {
+    // 必须有UUID且为字符串
+    if (!beacon.uuid || typeof beacon.uuid !== 'string') {
+      console.warn('忽略无效信标：缺少UUID', beacon);
+      return false;
     }
     
-    // 调用最小二乘法求解
-    const result = solveByLeastSquares(matrixA, vectorB);
-    if (result) {
-      return { x: result[0], y: result[1] };
+    // 必须有坐标且为数字
+    if (typeof beacon.x !== 'number' || typeof beacon.y !== 'number') {
+      console.warn('忽略无效信标：缺少有效坐标', beacon);
+      return false;
     }
     
-    return null;
-  } catch (e) {
-    console.error('计算位置时出错', e);
-    return null;
+    // 必须有发射功率且为数字
+    if (typeof beacon.txPower !== 'number') {
+      console.warn('忽略无效信标：缺少发射功率', beacon);
+      return false;
+    }
+    
+    return true;
+  });
+  
+  console.log('已设置', configuredBeacons.length, '个有效信标');
+  return true;
+}
+
+/**
+ * 获取已配置的信标列表
+ * @returns {Array} 信标数组
+ */
+function getConfiguredBeacons() {
+  return [...configuredBeacons];
+}
+
+/**
+ * 设置信号衰减因子
+ * @param {Number} factor 衰减因子
+ * @returns {Boolean} 设置是否成功
+ */
+function setSignalFactor(factor) {
+  if (typeof factor !== 'number' || factor <= 0) {
+    console.error('设置信号衰减因子失败：必须为正数');
+    return false;
+  }
+  
+  signalFactor = factor;
+  console.log('信号衰减因子已设置为:', factor);
+  return true;
+}
+
+/**
+ * 获取当前信号衰减因子
+ * @returns {Number} 衰减因子
+ */
+function getSignalFactor() {
+  return signalFactor;
+}
+
+/**
+ * 开始扫描信标
+ * @returns {Promise} 扫描结果
+ */
+function startScan() {
+  return new Promise((resolve, reject) => {
+    try {
+      if (!initialized) {
+        reject(new Error('信标管理器未初始化'));
+        return;
+      }
+      
+      if (isScanning) {
+        reject(new Error('已经在扫描中，忽略重复调用'));
+        return;
+      }
+      
+      if (configuredBeacons.length === 0) {
+        reject(new Error('没有配置的信标'));
+        return;
+      }
+      
+      checkBluetoothState()
+        .then(state => {
+          bluetoothState = state;
+          
+          if (callbacks.onBluetoothStateChanged) {
+            callbacks.onBluetoothStateChanged(bluetoothState);
+          }
+          
+          if (state !== BLUETOOTH_STATE.AVAILABLE) {
+            reject(new Error('蓝牙不可用'));
+            return;
+          }
+          
+          // --- NEW: Clear RSSI history on new scan --- 
+          rssiHistory = {}; 
+          // --- END NEW ---
+          beaconBuffer = [];
+          lastBufferProcessTime = 0;
+          
+          wx.openBluetoothAdapter({
+            success: function() {
+              startBluetoothDiscovery()
+                .then(() => {
+                  isScanning = true;
+                  console.log('[beaconManager] 开始扫描');
+                  startBufferProcessing();
+                  resolve(true);
+                })
+                .catch(err => {
+                  console.error('开始蓝牙发现失败:', err);
+                  reject(err);
+                });
+            },
+            fail: function(err) {
+              console.error('打开蓝牙适配器失败:', err);
+              
+              if (err.errCode === 10001) {
+                bluetoothState = BLUETOOTH_STATE.UNAUTHORIZED;
+              } else if (err.errCode === 10000) {
+                bluetoothState = BLUETOOTH_STATE.CLOSED;
+              } else {
+                bluetoothState = BLUETOOTH_STATE.UNSUPPORTED;
+              }
+              
+              if (callbacks.onBluetoothStateChanged) {
+                callbacks.onBluetoothStateChanged(bluetoothState);
+              }
+              
+              reject(err);
+            }
+          });
+        })
+        .catch(err => {
+          console.error('检查蓝牙状态失败:', err);
+          reject(err);
+        });
+    } catch (error) {
+      console.error('启动扫描出错:', error);
+      reject(error);
+    }
+  });
+}
+
+/**
+ * 停止扫描
+ * @returns {Promise} 停止结果
+ */
+function stopScan() {
+  return new Promise((resolve, reject) => {
+    if (!isScanning) {
+      resolve(true);
+      return;
+    }
+    
+    console.log('停止信标扫描...');
+    
+    stopBufferProcessing();
+    
+    beaconBuffer = [];
+    
+    isScanning = false;
+    
+    try {
+      wx.stopBeaconDiscovery({
+        success: function(res) {
+          console.log('停止iBeacon发现成功:', res);
+        },
+        fail: function(err) {
+          console.warn('停止iBeacon发现失败:', err);
+        },
+        complete: function() {
+          wx.offBeaconUpdate();
+        }
+      });
+    } catch (e) {
+      console.warn('调用停止iBeacon发现时出错:', e);
+    }
+    
+    wx.stopBluetoothDevicesDiscovery({
+      success: function(res) {
+        console.log('停止蓝牙设备发现成功:', res);
+        
+        wx.offBluetoothDeviceFound();
+        
+        wx.closeBluetoothAdapter({
+          success: function(res) {
+            console.log('关闭蓝牙适配器成功:', res);
+            resolve(true);
+          },
+          fail: function(err) {
+            console.warn('关闭蓝牙适配器失败:', err);
+            resolve(true);
+          }
+        });
+      },
+      fail: function(err) {
+        console.error('停止蓝牙设备发现失败:', err);
+        wx.closeBluetoothAdapter({
+          complete: function() {
+            reject(err);
+          }
+        });
+      }
+    });
+  });
+}
+
+/**
+ * 开始蓝牙设备发现
+ * @private
+ * @returns {Promise} 开始结果
+ */
+function startBluetoothDiscovery() {
+  return new Promise((resolve, reject) => {
+    const uuids = configuredBeacons
+      .map(beacon => beacon.uuid)
+      .filter((uuid, index, self) => self.indexOf(uuid) === index);
+    
+    if (uuids.length === 0) {
+      const error = new Error('没有配置的信标UUID');
+      console.error(error.message);
+      reject(error);
+      return;
+    }
+    
+    wx.onBluetoothDeviceFound(onDeviceFound);
+    
+    wx.startBeaconDiscovery({
+      uuids: uuids,
+      ignoreBluetoothAvailable: true, // Continue even if adapter state changes briefly
+      success: function(res) {
+        console.log('iBeacon discovery started successfully for UUIDs:', uuids);
+        wx.onBeaconUpdate(function(res) {
+          if (res && res.beacons) {
+            res.beacons.forEach(function(beacon) {
+                // --- NEW: Apply RSSI Filter for onBeaconUpdate ---
+                const key = `${beacon.uuid}-${beacon.major}-${beacon.minor}`;
+                if (!rssiHistory[key]) {
+                    rssiHistory[key] = [];
+                }
+                let history = rssiHistory[key];
+                history.push(beacon.rssi);
+                if (history.length > RSSI_FILTER_WINDOW_SIZE) {
+                    history.shift(); // Remove oldest reading
+                }
+                // Calculate average RSSI
+                const sumRssi = history.reduce((acc, val) => acc + val, 0);
+                const averageRssi = Math.round(sumRssi / history.length);
+                // --- END FILTER LOGIC ---
+
+              const matchingBeacon = configuredBeacons.find(b => 
+                b.uuid.toLowerCase() === beacon.uuid.toLowerCase() && 
+                b.major === beacon.major && 
+                b.minor === beacon.minor
+              );
+              
+              if (matchingBeacon) {
+                const detectedBeacon = {
+                  uuid: beacon.uuid,
+                  major: beacon.major, // Include major/minor for accuracy
+                  minor: beacon.minor,
+                  name: matchingBeacon.name || '未命名信标', // Use configured display name
+                  rssi: averageRssi, // <-- Use filtered RSSI
+                  accuracy: beacon.accuracy, // Keep original accuracy if needed elsewhere
+                  distance: calculateDistance(averageRssi, matchingBeacon.txPower), // Calculate distance with filtered RSSI
+                  x: matchingBeacon.x,
+                  y: matchingBeacon.y,
+                  timestamp: Date.now()
+                };
+                
+                addToBuffer(detectedBeacon);
+              }
+            });
+          }
+        });
+        
+        startGenericBluetoothDiscovery(resolve, reject);
+      },
+      fail: function(err) {
+        console.warn('iBeacon专用API启动失败，尝试使用通用蓝牙API:', err);
+        startGenericBluetoothDiscovery(resolve, reject);
+      }
+    });
+  });
+}
+
+/**
+ * 启动通用蓝牙设备发现
+ * @private
+ * @param {Function} resolve Promise解析函数
+ * @param {Function} reject Promise拒绝函数
+ */
+function startGenericBluetoothDiscovery(resolve, reject) {
+  wx.startBluetoothDevicesDiscovery({
+    services: [],
+    allowDuplicatesKey: true,
+    success: function() {
+      resolve(true);
+    },
+    fail: function(err) {
+      console.error('启动通用蓝牙设备发现失败:', err);
+      reject(err);
+    }
+  });
+}
+
+/**
+ * 处理发现设备事件 (Generic fallback)
+ * @private
+ * @param {Object} res 设备信息
+ */
+function onDeviceFound(res) {
+  try {
+    if (!isScanning || !res.devices || !Array.isArray(res.devices) || res.devices.length === 0) return;
+    res.devices.forEach(device => {
+      // Avoid processing if already handled by onBeaconUpdate (check advertisData might not be reliable)
+      // A better check might involve comparing deviceId or buffer contents, but can be complex.
+      // For now, rely on processDevice filtering logic.
+      processDevice(device); 
+    });
+  } catch (err) {
+    console.error('处理发现设备事件出错:', err);
   }
 }
 
 /**
- * 使用最小二乘法求解线性方程组 Ax = b
- * @param {Array} A 系数矩阵
- * @param {Array} b 常数向量
- * @return {Array|null} 解向量 [x, y] 或失败时返回null
+ * 处理设备数据 (Generic fallback)
+ * @private
+ * @param {Object} device 设备信息
  */
-function solveByLeastSquares(A, b) {
+function processDevice(device) {
   try {
-    // 转置矩阵A
-    const AT = transpose(A);
+    if (!device || !device.advertisData) return;
+    if (typeof device.RSSI !== 'number') return;
+
+    // Attempt to parse iBeacon data from advertisement
+    let iBeaconData = parseAdvertisDataStandard(device.advertisData) || parseAdvertisDataAlternative(device.advertisData);
     
-    // 计算AT*A
-    const ATA = multiplyMatrices(AT, A);
+    // If not identifiable as iBeacon via advertisement, skip
+    if (!iBeaconData) return; 
+
+    const matchingBeacon = configuredBeacons.find(b => 
+        b.uuid.toLowerCase() === iBeaconData.uuid.toLowerCase() &&
+        b.major === iBeaconData.major &&
+        b.minor === iBeaconData.minor
+    );
+
+    // If it doesn't match a configured beacon, skip
+    if (!matchingBeacon) return; 
+
+    // --- NEW: Apply RSSI Filter for processDevice ---
+    const key = `${iBeaconData.uuid}-${iBeaconData.major}-${iBeaconData.minor}`;
+    if (!rssiHistory[key]) {
+        rssiHistory[key] = [];
+    }
+    let history = rssiHistory[key];
+    history.push(device.RSSI); // Use raw RSSI from device object
+    if (history.length > RSSI_FILTER_WINDOW_SIZE) {
+        history.shift();
+    }
+    const sumRssi = history.reduce((acc, val) => acc + val, 0);
+    const averageRssi = Math.round(sumRssi / history.length);
+    // --- END FILTER LOGIC ---
+
+    const txPower = matchingBeacon.txPower || iBeaconData.txPower || DISTANCE_CALIBRATION;
+    const distance = calculateDistance(averageRssi, txPower); // Calculate distance with filtered RSSI
+
+    // Basic distance validity check
+    if (distance === null || distance < 0 || distance > 100) { // Increased upper bound slightly
+        // console.log(`Invalid distance calculated: ${distance} for ${key}`);
+        return;
+    }
+
+    const detectedBeacon = {
+      uuid: iBeaconData.uuid,
+      major: iBeaconData.major,
+      minor: iBeaconData.minor,
+      name: matchingBeacon.name || '未命名信标',
+      rssi: averageRssi, // <-- Use filtered RSSI
+      distance: distance,
+      x: matchingBeacon.x,
+      y: matchingBeacon.y,
+      timestamp: Date.now()
+    };
+
+    addToBuffer(detectedBeacon);
+  } catch (err) {
+    console.error('处理设备数据出错 (processDevice):', err, device);
+  }
+}
+
+/**
+ * 将信标添加到缓冲区
+ * @private
+ * @param {Object} beacon 信标数据
+ */
+function addToBuffer(beacon) {
+  const existingIndex = beaconBuffer.findIndex(b => b.uuid === beacon.uuid);
+  
+  if (existingIndex >= 0) {
+    beaconBuffer[existingIndex] = beacon;
+  } else {
+    beaconBuffer.push(beacon);
+  }
+}
+
+/**
+ * 开始处理缓冲区
+ * @private
+ */
+function startBufferProcessing() {
+  stopBufferProcessing();
+  
+  processTimer = setInterval(processBuffer, 1000);
+}
+
+/**
+ * 停止处理缓冲区
+ * @private
+ */
+function stopBufferProcessing() {
+  if (processTimer) {
+    clearInterval(processTimer);
+    processTimer = null;
+  }
+}
+
+/**
+ * 处理缓冲区中的信标数据
+ * @private
+ */
+function processBuffer() {
+  try {
+    if (!isScanning) {
+      stopBufferProcessing();
+      return;
+    }
     
-    // 计算AT*b
-    const ATb = multiplyMatrixVector(AT, b);
+    const now = Date.now();
+    lastBufferProcessTime = now;
     
-    // 计算(AT*A)的逆
-    const inv = inverse2x2(ATA);
+    const validBeacons = beaconBuffer.filter(beacon => {
+      return (now - beacon.timestamp) < 5000;
+    });
     
-    if (!inv) {
-      console.error('矩阵求逆失败');
+    beaconBuffer = validBeacons;
+    
+    if (validBeacons.length > 0 && typeof callbacks.onBeaconsDetected === 'function') {
+      callbacks.onBeaconsDetected(validBeacons);
+    }
+  } catch (err) {
+    console.error('处理缓冲区出错:', err);
+    
+    if (typeof callbacks.onError === 'function') {
+      callbacks.onError(err);
+    }
+  }
+}
+
+/**
+ * 根据RSSI计算距离
+ * @private
+ * @param {Number} rssi 信号强度
+ * @param {Number} txPower 发射功率
+ * @returns {Number} 估算距离（米）
+ */
+function calculateDistance(rssi, txPower) {
+  try {
+    if (rssi > txPower) {
+      return 0.1;
+    }
+    
+    const distance = Math.pow(10, (txPower - rssi) / (10 * signalFactor));
+    
+    if (isNaN(distance) || !isFinite(distance) || distance <= 0) {
       return null;
     }
     
-    // 计算x = (AT*A)^(-1) * AT * b
-    return multiplyMatrixVector(inv, ATb);
-  } catch (e) {
-    console.error('最小二乘法求解失败', e);
+    return Math.min(distance, 50);
+  } catch (err) {
+    console.error('计算距离出错:', err);
     return null;
   }
-}
-
-// 矩阵转置
-function transpose(matrix) {
-  const rows = matrix.length;
-  const cols = matrix[0].length;
-  const result = Array(cols).fill().map(() => Array(rows).fill(0));
-  
-  for (let i = 0; i < rows; i++) {
-    for (let j = 0; j < cols; j++) {
-      result[j][i] = matrix[i][j];
-    }
-  }
-  
-  return result;
-}
-
-// 矩阵乘法
-function multiplyMatrices(A, B) {
-  const rowsA = A.length;
-  const colsA = A[0].length;
-  const rowsB = B.length;
-  const colsB = B[0].length;
-  
-  if (colsA !== rowsB) {
-    throw new Error('矩阵维度不匹配');
-  }
-  
-  const result = Array(rowsA).fill().map(() => Array(colsB).fill(0));
-  
-  for (let i = 0; i < rowsA; i++) {
-    for (let j = 0; j < colsB; j++) {
-      for (let k = 0; k < colsA; k++) {
-        result[i][j] += A[i][k] * B[k][j];
-      }
-    }
-  }
-  
-  return result;
-}
-
-// 矩阵与向量相乘
-function multiplyMatrixVector(A, b) {
-  const rows = A.length;
-  const cols = A[0].length;
-  
-  if (cols !== b.length) {
-    throw new Error('矩阵与向量维度不匹配');
-  }
-  
-  const result = Array(rows).fill(0);
-  
-  for (let i = 0; i < rows; i++) {
-    for (let j = 0; j < cols; j++) {
-      result[i] += A[i][j] * b[j];
-    }
-  }
-  
-  return result;
-}
-
-// 2x2矩阵求逆
-function inverse2x2(A) {
-  if (A.length !== 2 || A[0].length !== 2) {
-    throw new Error('必须是2x2矩阵');
-  }
-  
-  const det = A[0][0] * A[1][1] - A[0][1] * A[1][0];
-  
-  if (Math.abs(det) < 1e-10) {
-    console.error('矩阵接近奇异，不可逆');
-    return null;
-  }
-  
-  const invDet = 1 / det;
-  
-  return [
-    [A[1][1] * invDet, -A[0][1] * invDet],
-    [-A[1][0] * invDet, A[0][0] * invDet]
-  ];
 }
 
 /**
- * 获取可用于定位的beacon列表
- * @param {Array} detectedBeacons 检测到的beacon列表
- * @return {Array} 匹配配置的beacon列表，包含位置信息和距离估计
+ * 将字节数组转换为十六进制字符串
+ * @private
+ * @param {Array|Uint8Array} array 字节数组
+ * @returns {String} 十六进制字符串
  */
-function getBeaconsWithDistance(detectedBeacons) {
-  const configuredBeacons = app.globalData.beacons || [];
-  const n = app.globalData.signalPathLossExponent || 2.5;
-  const beaconsWithDistance = [];
-  
-  // 对于每个检测到的beacon
-  detectedBeacons.forEach(detected => {
-    // 在已配置的beacon中查找
-    const configured = configuredBeacons.find(
-      b => b.uuid === detected.uuid && 
-           b.major === detected.major && 
-           b.minor === detected.minor
-    );
-    
-    if (configured) {
-      // 生成唯一标识
-      const beaconId = `${detected.uuid}-${detected.major}-${detected.minor}`;
-      
-      // 应用滑动平均滤波
-      const filteredRssi = applyRssiFilter(beaconId, detected.rssi);
-      
-      // 计算距离
-      const distance = calculateDistance(
-        filteredRssi, 
-        configured.txPower, 
-        n
-      );
-      
-      if (distance > 0) {
-        beaconsWithDistance.push({
-          id: beaconId,
-          x: configured.x,
-          y: configured.y,
-          distance: distance,
-          rssi: filteredRssi
-        });
-      }
-    }
-  });
-  
-  return beaconsWithDistance;
+function arrayToHex(array) {
+  return Array.prototype.map.call(array, x => ('00' + x.toString(16)).slice(-2)).join('');
 }
 
+// --- NEW Helper Functions for Parsing (copied from config.js - should ideally be in a shared util) ---
+// Standard iBeacon解析 (主要依据Apple规范)
+function parseAdvertisDataStandard(advertisData) {
+  try {
+      const dataView = new DataView(advertisData);
+      for (let i = 0; i <= dataView.byteLength - 25; i++) {
+          if (dataView.getUint8(i) === 0x4C && dataView.getUint8(i + 1) === 0x00 &&
+              dataView.getUint8(i + 2) === 0x02 && dataView.getUint8(i + 3) === 0x15) {
+              const startIndex = i + 4;
+              let uuid = '';
+              for (let j = 0; j < 16; j++) {
+                  uuid += dataView.getUint8(startIndex + j).toString(16).padStart(2, '0');
+                  if (j === 3 || j === 5 || j === 7 || j === 9) uuid += '-';
+              }
+              const major = dataView.getUint16(startIndex + 16, false); // Big-endian
+              const minor = dataView.getUint16(startIndex + 18, false); // Big-endian
+              const txPower = dataView.getInt8(startIndex + 20);
+              return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
+          }
+      }
+  } catch (e) { /* console.error('标准解析错误', e); */ } // Silence errors in production
+  return null;
+}
+
+// 备用iBeacon解析 (针对可能省略Apple ID的情况)
+function parseAdvertisDataAlternative(advertisData) {
+  try {
+      const dataView = new DataView(advertisData);
+      for (let i = 0; i <= dataView.byteLength - 23; i++) { 
+          if (dataView.getUint8(i) === 0x02 && dataView.getUint8(i + 1) === 0x15) {
+              const startIndex = i + 2;
+              let uuid = '';
+              for (let j = 0; j < 16; j++) {
+                  uuid += dataView.getUint8(startIndex + j).toString(16).padStart(2, '0');
+                  if (j === 3 || j === 5 || j === 7 || j === 9) uuid += '-';
+              }
+              const major = dataView.getUint16(startIndex + 16, false);
+              const minor = dataView.getUint16(startIndex + 18, false);
+              const txPower = dataView.getInt8(startIndex + 20);
+              return { isIBeacon: true, uuid: uuid.toUpperCase(), major, minor, txPower };
+          }
+      }
+  } catch (e) { /* console.error('备用解析错误', e); */ } // Silence errors in production
+  return null;
+}
+// --- END NEW Helper Functions ---
+
 module.exports = {
-  startBeaconDiscovery,
-  stopBeaconDiscovery,
-  calculateDistance,
-  calculatePosition,
-  getBeaconsWithDistance
+  BLUETOOTH_STATE,
+  init,
+  setCallbacks,
+  startScan,
+  stopScan,
+  setConfiguredBeacons,
+  getConfiguredBeacons,
+  setSignalFactor,
+  getSignalFactor
 }; 

@@ -25,10 +25,15 @@
   
   <!-- 控制按钮区域 -->
   <view class="controls">
-    <button class="locate-btn {{isLocating ? 'stop' : 'start'}}" bindtap="toggleLocating" 
-            disabled="{{!hasMap || !hasBeacons || bluetoothState !== 'available'}}">
-      {{isLocating ? '停止定位' : '开始定位'}}
-    </button>
+    <view class="control-row">
+      <button class="locate-btn {{isLocating ? 'stop' : 'start'}}" bindtap="toggleLocating" 
+              disabled="{{!hasMap || !hasBeacons || bluetoothState !== 'available'}}">
+        {{isLocating ? '停止定位' : '开始定位'}}
+      </button>
+      <button class="clear-btn" bindtap="clearTrajectoryHistory" disabled="{{!isLocating}}">
+        清除轨迹
+      </button>
+    </view>
     
     <!-- 蓝牙状态提示 -->
     <view class="bluetooth-status">
